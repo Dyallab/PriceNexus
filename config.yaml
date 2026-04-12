@@ -1,0 +1,19 @@
+database:
+  path: "prices.db"
+
+scrapers:
+  MercadoLibre:
+    enabled: true
+    timeout: 30
+  Garbarino:
+    enabled: true
+    timeout: 30
+  Tecnoshops:
+    enabled: true
+    timeout: 30
+
+scheduler:
+  interval_minutes: 60
+
+logging:
+  level: "info"
