@@ -129,7 +129,7 @@ Wave 3 (After Wave 2 - CLI commands + integration):
 ├── Task 14: CLI history command [deep]
 ├── Task 15: CLI add command [quick]
 ├── Task 16: Scheduler - basic cron [unspecified-high]
-├── Task 17: Configuration (config.yaml) [quick]
+
 └── Task 18: Error handling + logging [unspecified-high]
 
 Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
@@ -594,16 +594,7 @@ Wave FINAL (After ALL tasks — 4 parallel reviews, then user okay):
   - Blocks: None
   - Blocked By: 13, 14
 
-- [ ] 17. Configuration (config.yaml)
 
-  **What to do**:
-  - Crear config.yaml ejemplo
-  - Configuraciones:
-    - db_path
-    - scrape interval
-    - rate_limit
-    - user_agent
-    - shops enabled
 
   **Recommended Agent Profile**:
   - Category: quick

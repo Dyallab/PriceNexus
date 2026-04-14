@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -38,11 +39,16 @@ var (
 			if err != nil {
 				fmt.Printf("Warning: Could not open log file: %v\n", err)
 			} else {
-				log.SetOutput(logFile)
 				defer logFile.Close()
 			}
 
-			// Also log to console
+			// Write to both console and file for real-time feedback
+			var logOutput io.Writer = os.Stdout
+			if logFile != nil {
+				logOutput = io.MultiWriter(os.Stdout, logFile)
+			}
+
+			log.SetOutput(logOutput)
 			log.SetFormatter(&logrus.TextFormatter{
 				FullTimestamp: true,
 			})
@@ -56,11 +62,15 @@ var (
 
 			fmt.Printf("Buscando: %s\n\n", query)
 
+			log.Infof("Starting orchestrator search for: %s", query)
+
 			results, err := orch.Search(context.Background(), query)
 			if err != nil {
 				fmt.Printf("Error en búsqueda: %v\n", err)
 				return
 			}
+
+			log.Infof("Orchestrator returned %d results", len(results))
 
 			if len(results) == 0 {
 				fmt.Println("No se encontraron resultados.")

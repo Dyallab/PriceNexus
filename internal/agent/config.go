@@ -7,7 +7,6 @@ import (
 
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/ollama"
-	"github.com/tmc/langchaingo/llms/openai"
 )
 
 type LLMConfig struct {
@@ -18,9 +17,9 @@ type LLMConfig struct {
 
 func DefaultLLMConfig() LLMConfig {
 	return LLMConfig{
-		Orchestrator:  "openrouter:xiaomi/mimo-v2-flash",
-		WebSearcher:   "ollama:gemma4:e4b",
-		DataExtractor: "ollama:gemma4:e4b",
+		Orchestrator:  "openrouter:minimax/minimax-m2.5:free",
+		WebSearcher:   "openrouter:minimax/minimax-m2.5:free",
+		DataExtractor: "openrouter:minimax/minimax-m2.5:free",
 	}
 }
 
@@ -29,24 +28,10 @@ func CreateLLMs(config LLMConfig) (orchestratorLLM, webSearcherLLM, dataExtracto
 
 	if config.Orchestrator != "" {
 		if config.Orchestrator == "openai" || config.Orchestrator == "openrouter" {
-			opts := []openai.Option{}
-			if openRouterAPIKey != "" {
-				opts = append(opts, openai.WithBaseURL("https://openrouter.ai/api/v1"))
-			}
-			orchestratorLLM, err = openai.New(opts...)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to create OpenAI LLM: %w", err)
-			}
+			orchestratorLLM = NewOpenRouterModel(openRouterAPIKey, "openai/gpt-4o-mini")
 		} else if strings.HasPrefix(config.Orchestrator, "openrouter:") {
 			modelName := strings.TrimPrefix(config.Orchestrator, "openrouter:")
-			opts := []openai.Option{
-				openai.WithModel(modelName),
-				openai.WithBaseURL("https://openrouter.ai/api/v1"),
-			}
-			orchestratorLLM, err = openai.New(opts...)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to create OpenRouter LLM (%s): %w", modelName, err)
-			}
+			orchestratorLLM = NewOpenRouterModel(openRouterAPIKey, modelName)
 		}
 	}
 
@@ -65,14 +50,9 @@ func CreateLLMs(config LLMConfig) (orchestratorLLM, webSearcherLLM, dataExtracto
 			if strings.HasPrefix(config.WebSearcher, "openrouter:") {
 				modelName = strings.TrimPrefix(config.WebSearcher, "openrouter:")
 			}
-			opts := []openai.Option{
-				openai.WithModel(modelName),
-				openai.WithBaseURL("https://openrouter.ai/api/v1"),
-			}
-			webSearcherLLM, err = openai.New(opts...)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to create OpenRouter LLM for web searcher (%s): %w", modelName, err)
-			}
+			webSearcherModel := NewOpenRouterModel(openRouterAPIKey, modelName)
+			webSearcherModel.AddWebSearchTool()
+			webSearcherLLM = webSearcherModel
 		}
 	}
 
@@ -91,14 +71,7 @@ func CreateLLMs(config LLMConfig) (orchestratorLLM, webSearcherLLM, dataExtracto
 			if strings.HasPrefix(config.DataExtractor, "openrouter:") {
 				modelName = strings.TrimPrefix(config.DataExtractor, "openrouter:")
 			}
-			opts := []openai.Option{
-				openai.WithModel(modelName),
-				openai.WithBaseURL("https://openrouter.ai/api/v1"),
-			}
-			dataExtractorLLM, err = openai.New(opts...)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to create OpenRouter LLM for data extractor (%s): %w", modelName, err)
-			}
+			dataExtractorLLM = NewOpenRouterModel(openRouterAPIKey, modelName)
 		}
 	}
 

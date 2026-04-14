@@ -3,6 +3,7 @@ package formfinder
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
@@ -48,12 +49,50 @@ func NewFormFinderAgent() *FormFinderAgent {
 	logger := logrus.New()
 	logger.SetLevel(logrus.InfoLevel)
 
+	// Inicializar la semilla para números aleatorios
+	rand.Seed(time.Now().UnixNano())
+
 	return &FormFinderAgent{
 		logger: logger,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// getRandomUserAgent retorna un User-Agent aleatorio de una lista realista
+func getRandomUserAgent() string {
+	userAgents := []string{
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.131 Safari/537.36",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/91.0.864.59",
+	}
+	return userAgents[rand.Intn(len(userAgents))]
+}
+
+// setDynamicHeaders configura headers realistas y variados para la solicitud HTTP
+func setDynamicHeaders(req *http.Request) {
+	// User-Agent aleatorio
+	req.Header.Set("User-Agent", getRandomUserAgent())
+
+	// Accept headers
+	acceptHeaders := []string{
+		"text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+		"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+		"text/html,application/xhtml+xml,application/xml;q=0.99,image/webp,image/apng,*/*;q=0.8",
+	}
+	req.Header.Set("Accept", acceptHeaders[rand.Intn(len(acceptHeaders))])
+
+	// Otros headers realistas
+	req.Header.Set("Accept-Language", "es-ES,es;q=0.9,en-US;q=0.8")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	req.Header.Set("DNT", "1")
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
 }
 
 // DiscoverSearchForms analiza una página web y descubre formularios de búsqueda
@@ -65,9 +104,8 @@ func (f *FormFinderAgent) DiscoverSearchForms(ctx context.Context, pageURL strin
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 
-	// Use realistic browser headers
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	// Use realistic and dynamic browser headers
+	setDynamicHeaders(req)
 
 	resp, err := f.client.Do(req)
 	if err != nil {

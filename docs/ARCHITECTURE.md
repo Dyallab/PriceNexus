@@ -2,7 +2,7 @@
 
 ## Resumen Ejecutivo
 
-PriceNexus ha sido transformado de un sistema monolítico de scraping a una arquitectura multi-agente moderna usando LangChain Go. Esta arquitectura permite mayor flexibilidad, escalabilidad y mantenibilidad.
+PriceNexus es un sistema multi-agente para búsqueda y tracking de precios en tiendas argentinas. Usa LangChain Go y OpenRouter's web_search server tool para encontrar dinámicamente productos en línea.
 
 ## Arquitectura Actual
 
@@ -20,13 +20,14 @@ PriceNexus ha sido transformado de un sistema monolítico de scraping a una arqu
          ┌─────────────────┼─────────────────┬──────────┐
          │                 │                 │          │
          ▼                 ▼                 ▼          ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐
-│ URL FINDER   │  │ PAGE LOADER  │  │ DATA     │  │ VALIDATE │
-│  (Gemma4)    │  │  (HTTP)      │  │ EXTRACT  │  │ (Gemma4) │
-│              │  │              │  │ (Gemma4) │  │          │
-│ Busca URLs   │  │ Descarga     │  │ Extrae   │  │ Valida   │
-│ en la web    │  │ HTML         │  │ datos    │  │ datos    │
-└──────────────┘  └──────────────┘  └──────────┘  └──────────┘
+┌──────────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐
+│  WEB SEARCHER    │  │ PAGE LOADER  │  │ DATA     │  │ VALIDATE │
+│ (OpenRouter +    │  │  (HTTP)      │  │ EXTRACT  │  │ (Ollama) │
+│  web_search)     │  │              │  │ (Ollama) │  │          │
+│                  │  │ Descarga     │  │ Extrae   │  │ Valida   │
+│ Busca URLs       │  │ HTML         │  │ datos    │  │ datos    │
+│ en Argentina     │  │              │  │ del HTML │  │          │
+└──────────────────┘  └──────────────┘  └──────────┘  └──────────┘
                                     │
                                     ▼
                               ┌──────────┐
@@ -38,14 +39,14 @@ PriceNexus ha sido transformado de un sistema monolítico de scraping a una arqu
 
 ### Configuración de LLMs
 
-| Agente | LLM | Modelo | Propósito | Carga de Contexto |
-|--------|-----|--------|-----------|-------------------|
-| Orchestrator | OpenRouter | xiaomi/mimo-v2-flash | Coordinación y planificación | Media |
-| URL Finder | Ollama | gemma4:e4b local | Buscar URLs en la web | Baja |
-| Page Loader | N/A | N/A | Descargar HTML | N/A |
-| Data Extractor | Ollama | gemma4:e4b local | Extraer datos de HTML | Baja |
-| Validator | Ollama | gemma4:e4b local | Validar resultados | Baja |
-| Storage Agent | N/A | N/A | Persistencia en SQLite | N/A |
+| Agente | LLM | Modelo | Propósito | Tool |
+|--------|-----|--------|-----------|------|
+| Orchestrator | OpenRouter | xiaomi/mimo-v2-flash | Coordinación y planificación | - |
+| Web Searcher | OpenRouter | xiaomi/mimo-v2-flash | Buscar URLs en Argentina | openrouter:web_search |
+| Page Loader | N/A | N/A | Descargar HTML | - |
+| Data Extractor | Ollama | gemma4:e4b local | Extraer datos de HTML | - |
+| Validator | Ollama | gemma4:e4b local | Validar resultados | - |
+| Storage Agent | N/A | N/A | Persistencia en SQLite | - |
 
 Ver [LLM_CONFIG.md](LLM_CONFIG.md) para detalles completos.
 
@@ -54,58 +55,133 @@ Ver [LLM_CONFIG.md](LLM_CONFIG.md) para detalles completos.
 ```
 internal/agent/
 ├── orchestrator/          # Agente orquestador
-│   ├── agent.go           # Implementación base
-│   └── orchestrator.go    # Orquestación principal
-├── websearcher/           # Agente buscador web
+│   ├── agent.go
+│   └── orchestrator.go
+├── websearcher/           # Agente buscador web (usa OpenRouter web_search)
 │   └── agent.go
+├── pageloader/            # Carga HTML
+│   └── pageloader.go
 ├── dataextractor/         # Agente extractor de datos
+│   └── agent.go
+├── validator/             # Agente validador
 │   └── agent.go
 ├── storage/               # Agente de almacenamiento
 │   ├── agent.go
 │   └── agent_test.go
-└── shared/                # Componentes compartidos
-    └── models.go          # Tipos de datos
+├── shared/                # Componentes compartidos
+│   └── models.go
+├── openrouter.go          # Cliente OpenRouter con soporte a tools
+└── config.go              # Configuración de LLMs
 ```
+
+## Búsqueda Web: OpenRouter web_search
+
+### Cómo Funciona
+
+1. **Web Searcher Agent** genera un prompt instructivo en español
+2. **OpenRouter** recibe la solicitud con el tool `openrouter:web_search`
+3. **Server Tool** ejecuta la búsqueda con filtros de dominio (.com.ar, .ar)
+4. **Resultados** se retornan con URLs de tiendas argentinas
+5. **Agent** parsea las URLs y las convierte a `SearchResult`
+
+### Configuración
+
+El Web Searcher está configurado con:
+
+```go
+{
+  "type": "openrouter:web_search",
+  "parameters": {
+    "allowed_domains": [".com.ar", ".ar"],
+    "max_results": 10
+  }
+}
+```
+
+**Beneficios:**
+- ✅ Búsqueda automática y dinámica
+- ✅ Filtrado de dominios argentinos integrado
+- ✅ Legal y oficial
+- ✅ Sin mantenimiento de scrapers
+- ✅ Modelo decide cuándo buscar
+- ✅ Costo: $4 por 1,000 resultados (~$0.04 por búsqueda típica)
+
+### Cambios Recientes
+
+- ❌ **Eliminado**: URLFinder (hardcodeaba tiendas)
+- ❌ **Eliminado**: SearchTool (scraping manual DuckDuckGo/Bing)
+- ✅ **Añadido**: Soporte a server tools en OpenRouter model
+- ✅ **Integrado**: openrouter:web_search con filtro de dominios
 
 ## Implementación
 
 ### Dependencias
 
 - `github.com/tmc/langchaingo` - Framework de agentes LangChain para Go
-- `github.com/gocolly/colly` - Web scraping
+- `github.com/PuerkitoBio/goquery` - Parsing HTML (para Data Extractor)
 - `github.com/jmoiron/sqlx` - ORM SQLite
 - `github.com/sirupsen/logrus` - Logging
 
-### Configuración
+### Características Clave
 
-1. **go.mod**: Añadida dependencia de LangChain Go
-2. **Modelos de datos**: Estructuras compartidas en `internal/agent/shared/models.go`
-3. **Tests**: Tests básicos implementados para el agente de almacenamiento
+1. **Búsqueda dinámica**: Solo dominios argentinos (.com.ar, .ar)
+2. **Sin hardcodeo**: Cualquier tienda argentina es descubierta automáticamente
+3. **Flexible**: Fácil cambiar modelos vía variables de entorno
+4. **Escalable**: Arquitectura preparada para nuevos agentes
+5. **Testeable**: Cada agente puede testearse independientemente
 
-## Beneficios de la Arquitectura Multi-Agente
+## Flujo de Búsqueda Completo
 
-1. **Separación de responsabilidades**: Cada agente hace una cosa bien
-2. **Escalabilidad**: Puedes añadir más agentes sin modificar el core
-3. **Flexibilidad**: Cambiar modelos sin afectar otros agentes
-4. **Mantenibilidad**: Código más limpio y organizado
-5. **Testing**: Puedes testear agentes individualmente
-6. **Performance**: Ollama local para tareas simples, OpenRouter para complejas
+```
+1. Usuario ejecuta: ./pricenexus search "Game Stick Lite"
+                            │
+                            ▼
+2. Orchestrator.Search() inicia
+                            │
+                            ▼
+3. WebSearcher busca usando OpenRouter web_search
+   "Search for online stores selling 'Game Stick Lite' in Argentina"
+   [Tool: openrouter:web_search con allowed_domains: [.com.ar, .ar]]
+                            │
+                            ▼
+4. OpenRouter ejecuta búsqueda y retorna URLs argentinas
+   - compagamer.com.ar/game-stick-lite
+   - mexx.com.ar/productos?q=game-stick
+   - etc.
+                            │
+                            ▼
+5. PageLoader descarga HTML de cada URL
+                            │
+                            ▼
+6. DataExtractor extrae precios usando Ollama local
+                            │
+                            ▼
+7. Validator valida los datos extraídos
+                            │
+                            ▼
+8. Storage persiste en SQLite
+                            │
+                            ▼
+9. Resultados retornados al usuario
+```
 
 ## Uso
 
-### Búsqueda de productos
+### Búsqueda de Productos
 
 ```bash
 ./pricenexus search "Game Stick Lite"
 ```
 
-### Historial de precios
+Busca automáticamente en tiendas argentinas únicamente.
+
+### Historial de Precios
 
 ```bash
 ./pricenexus history "Game Stick Lite"
 ```
 
-### Programación
+### Programático
 
 ```go
 import (
@@ -126,39 +202,40 @@ func main() {
     if err != nil {
         panic(err)
     }
+    
+    for _, r := range results {
+        println(r.ProductName, r.Price, r.URL)
+    }
 }
 ```
 
-## Próximos Pasos Recomendados
+## Beneficios de la Arquitectura
 
-1. **Implementar herramientas reales** para los agentes:
-   - Web search tool (navegación y scraping)
-   - Data extraction tool (parseo HTML)
-   - Storage tool (persistencia en DB)
-
-2. **Conectar con LLMs reales**:
-   - OpenRouter para orchestrator (GPT-4, Claude)
-   - Ollama local para websearcher y dataextractor
-
-3. **Añadir tests más completos**:
-   - Tests de integración para cada agente
-   - Tests de mocks para herramientas
-   - Tests de rendimiento
-
-4. **Documentación y monitorización**:
-   - Logs estructurados
-   - Métricas de rendimiento
-   - Health checks
+1. **Separación de responsabilidades**: Cada agente hace una cosa bien
+2. **Escalabilidad**: Nuevos agentes sin afectar al core
+3. **Flexibilidad**: Cambiar modelos vía environment variables
+4. **Mantenibilidad**: Sin scrapers frágiles, búsqueda oficial
+5. **Dinamismo**: Descubre cualquier tienda argentina automáticamente
+6. **Costo-efectivo**: OpenRouter + Ollama local = máximo valor
 
 ## Consideraciones de Seguridad
 
-- Rate limiting para evitar bloqueos
-- User-Agent configurable
-- Cache de resultados para evitar scraping innecesario
-- Validación de datos extraídos
+- Rate limiting implícito (OpenRouter)
+- Filtrado de dominios integrado
+- Validación de datos antes de persistencia
+- User-Agent configurable (via OpenRouter)
+- Logs detallados para auditoría
+
+## Próximos Pasos Posibles
+
+1. **Caché de búsquedas**: Evitar búsquedas duplicadas
+2. **Notificaciones**: Alertar cuando baja el precio
+3. **Más tiendas**: Argentina tiene muchas tiendas menores
+4. **Multihilo**: Procesar múltiples búsquedas en paralelo
+5. **APIs de tiendas**: Integrar APIs oficiales cuando sea posible
 
 ## Referencias
 
+- [OpenRouter Web Search Docs](https://openrouter.ai/docs/guides/features/server-tools/web-search)
 - [LangChain Go Documentation](https://tmc.github.io/langchaingo/docs/)
 - [LangChain Go GitHub](https://github.com/tmc/langchaingo)
-- [MRKL Agent Example](https://github.com/tmc/langchaingo/tree/main/examples/mrkl-agent-example)

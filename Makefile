@@ -4,7 +4,7 @@ BINARY_NAME=pricenexus
 GO_CMD=go
 MAIN_PATH=./cmd/cli
 
-build:
+build: clean
 	$(GO_CMD) build -o $(BINARY_NAME) $(MAIN_PATH)
 
 test:
