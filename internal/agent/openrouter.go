@@ -13,12 +13,19 @@ import (
 
 // OpenRouterModel implements the llms.Model interface using direct HTTP calls.
 type OpenRouterModel struct {
-	APIKey    string
-	Model     string
-	SessionID string
-	Client    *http.Client
-	Tools     []Tool
+	APIKey     string
+	Model      string
+	SessionID  string
+	Client     *http.Client
+	Tools      []Tool
+	MaxRetries int
+	RetryDelay time.Duration
 }
+
+const (
+	DefaultMaxRetries = 3
+	DefaultRetryDelay = 2 * time.Second
+)
 
 // Tool represents a tool that can be used by the model
 type Tool struct {
@@ -32,9 +39,11 @@ func NewOpenRouterModel(apiKey, model string) *OpenRouterModel {
 		APIKey: apiKey,
 		Model:  model,
 		Client: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: 300 * time.Second,
 		},
-		Tools: []Tool{},
+		Tools:      []Tool{},
+		MaxRetries: DefaultMaxRetries,
+		RetryDelay: DefaultRetryDelay,
 	}
 }
 
@@ -140,10 +149,30 @@ func (m *OpenRouterModel) GenerateContent(ctx context.Context, messages []llms.M
 	req.Header.Set("HTTP-Referer", "https://pricenexus.ai")
 	req.Header.Set("X-Title", "PriceNexus")
 
-	// Execute the request
-	resp, err := m.Client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	// Execute the request with retry logic for transient errors
+	var resp *http.Response
+
+	for attempt := 0; attempt <= m.MaxRetries; attempt++ {
+		resp, err = m.Client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("HTTP request failed: %w", err)
+		}
+
+		// Success or non-retryable error
+		if resp.StatusCode != http.StatusInternalServerError &&
+			resp.StatusCode != http.StatusServiceUnavailable &&
+			resp.StatusCode != http.StatusGatewayTimeout {
+			break
+		}
+
+		// Close body before retry
+		resp.Body.Close()
+
+		// Don't sleep after the last attempt
+		if attempt < m.MaxRetries {
+			delay := m.RetryDelay * time.Duration(1<<attempt) // Exponential backoff
+			time.Sleep(delay)
+		}
 	}
 	defer resp.Body.Close()
 

@@ -17,9 +17,9 @@ type LLMConfig struct {
 
 func DefaultLLMConfig() LLMConfig {
 	return LLMConfig{
-		Orchestrator:  "openrouter:minimax/minimax-m2.5:free",
-		WebSearcher:   "openrouter:minimax/minimax-m2.5:free",
-		DataExtractor: "openrouter:minimax/minimax-m2.5:free",
+		Orchestrator:  "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
+		WebSearcher:   "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
+		DataExtractor: "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
 	}
 }
 

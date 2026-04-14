@@ -229,18 +229,6 @@ Buscando: PlayStation 5
 ✓ Búsqueda completada
 ```
 
-### Ver historial de precios
-
-```bash
-$ ./pricenexus history "PlayStation 5"
-
-Historial de precios para: PlayStation 5
-
-2024-12-15: $599,990 (Game Store)
-2024-12-14: $589,999 (ElectrónicaMax)
-2024-12-13: $599,990 (Game Store)
-```
-
 ## 🌍 Dominios Soportados
 
 PriceNexus busca **únicamente en tiendas argentinas**:
@@ -250,19 +238,6 @@ PriceNexus busca **únicamente en tiendas argentinas**:
 - ❌ `.com` - No se incluyen sitios internacionales
 
 Esto asegura que los precios estén en **pesos argentinos (ARS)** y sean relevantes localmente.
-
-## 🚨 Solución de Problemas
-
-### Error: "OPENROUTER_API_KEY not set"
-```bash
-export OPENROUTER_API_KEY=tu_clave_aqui
-```
-
-### Error: "Ollama connection refused"
-```bash
-# Inicia Ollama en otra terminal
-ollama serve
-```
 
 ### Resultados vacíos en búsqueda
 - Verifica que tienes conexión a internet
