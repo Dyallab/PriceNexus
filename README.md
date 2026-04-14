@@ -177,13 +177,3 @@ Buscando: PlayStation 5
 
 ✓ Búsqueda completada
 ```
-
-## 🌍 Dominios Soportados
-
-PriceNexus busca **únicamente en tiendas argentinas**:
-
-- ✅ `.com.ar` - Dominios comerciales argentinos
-- ✅ `.ar` - Dominios de Argentina
-- ❌ `.com` - No se incluyen sitios internacionales
-
-Esto asegura que los precios estén en **pesos argentinos (ARS)** y sean relevantes localmente.
