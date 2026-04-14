@@ -31,7 +31,6 @@ make build
 3. **Configurar variables de entorno:**
 ```bash
 cp .env.example .env
-# Edita .env y agrega tu OPENROUTER_API_KEY
 ```
 
 4. **Iniciar Ollama (en otra terminal):**
@@ -114,16 +113,14 @@ El Web Searcher usa el **server tool** `openrouter:web_search` de OpenRouter:
 ### Variables de Entorno Obligatorias
 
 ```bash
-# API Key de OpenRouter (requerida)
 export OPENROUTER_API_KEY=tu_clave_aqui
 ```
 
 ### Variables de Entorno Opcionales
 
 ```bash
-# Modelos a usar (tienen defaults sensatos)
-export PRICE_NEXUS_ORCHESTRATOR_LLM=openrouter:xiaomi/mimo-v2-flash
-export PRICE_NEXUS_WEBSEARCHER_LLM=openrouter:xiaomi/mimo-v2-flash
+export PRICE_NEXUS_ORCHESTRATOR_LLM=openrouter:nvidia/nemotron-3-super-120b-a12b:free
+export PRICE_NEXUS_WEBSEARCHER_LLM=openrouter:nvidia/nemotron-3-super-120b-a12b:free
 export PRICE_NEXUS_DATAEXTRACTOR_LLM=ollama:gemma4:e4b
 ```
 
@@ -134,10 +131,7 @@ Ver [LLM_CONFIG.md](docs/LLM_CONFIG.md) para opciones completas.
 Descargar modelos para extracción local:
 
 ```bash
-ollama pull gemma4:e4b    # Recomendado
-# O alternativas:
-ollama pull phi3:mini
-ollama pull llama3:8b
+ollama pull gemma4:e4b
 ```
 
 ## 📚 Documentación Completa
@@ -156,51 +150,6 @@ ollama pull llama3:8b
 | OpenRouter Web Search | ~$0.04/búsqueda | $4 por 1,000 resultados |
 | Ollama local | $0 | Sin costo de API |
 | **Total por búsqueda** | **~$0.05** | Muy económico |
-
-## 🛠️ Desarrollo
-
-### Compilar
-
-```bash
-make build
-```
-
-### Ejecutar tests
-
-```bash
-make test
-```
-
-### Limpiar
-
-```bash
-make clean
-```
-
-### Estructura del Proyecto
-
-```
-PriceNexus/
-├── cmd/
-│   └── cli/                    # CLI principal (main.go)
-├── internal/
-│   ├── agent/
-│   │   ├── orchestrator/       # Agente orquestador
-│   │   ├── websearcher/        # Búsqueda web (OpenRouter web_search)
-│   │   ├── pageloader/         # Carga HTML
-│   │   ├── dataextractor/      # Extracción de datos
-│   │   ├── validator/          # Validación
-│   │   ├── storage/            # Persistencia SQLite
-│   │   ├── shared/             # Tipos compartidos
-│   │   ├── openrouter.go       # Cliente OpenRouter con tools
-│   │   └── config.go           # Configuración de LLMs
-│   ├── scraper/                # Scrapers específicos de tiendas
-│   └── db/                     # Repositorio de base de datos
-├── docs/                       # Documentación completa
-├── migrations/                 # Migraciones SQL
-├── Makefile                    # Comandos útiles
-└── prices.db                   # Base de datos SQLite (se crea al ejecutar)
-```
 
 ## 🔧 Características Técnicas
 
@@ -238,32 +187,3 @@ PriceNexus busca **únicamente en tiendas argentinas**:
 - ❌ `.com` - No se incluyen sitios internacionales
 
 Esto asegura que los precios estén en **pesos argentinos (ARS)** y sean relevantes localmente.
-
-### Resultados vacíos en búsqueda
-- Verifica que tienes conexión a internet
-- Intenta con un producto más común
-- Revisa los logs en `logs/search.log`
-
-## 📄 Licencia
-
-MIT - Ver [LICENSE](LICENSE) para detalles
-
-## 🤝 Contribuciones
-
-Las contribuciones son bienvenidas. Por favor:
-
-1. Fork el proyecto
-2. Crea una rama para tu feature (`git checkout -b feature/mi-feature`)
-3. Commit tus cambios (`git commit -am 'Add mi-feature'`)
-4. Push a la rama (`git push origin feature/mi-feature`)
-5. Abre un Pull Request
-
-## 📞 Soporte
-
-- 📖 [Documentación completa](docs/)
-- 🐛 [Reportar problemas](https://github.com/dyallo/pricenexus/issues)
-- 💬 [Discussiones](https://github.com/dyallo/pricenexus/discussions)
-
----
-
-**Hecho con ❤️ para encontrar mejores precios en Argentina**
