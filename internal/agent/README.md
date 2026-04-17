@@ -1,125 +1,81 @@
-# Arquitectura Multi-Agente de PriceNexus
+# Arquitectura de `internal/agent`
 
-## Estructura de Agentes
+## Componentes actuales
 
-```
+```text
 internal/agent/
-├── orchestrator/          # Agente orquestador principal (MiMo-V2-Flash)
-├── urlfinder/             # Buscador de URLs (Gemma4)
-├── pageloader/            # Cargador de páginas (no LLM)
-├── dataextractor/         # Extractor de datos (Gemma4)
-├── validator/             # Validador de datos (Gemma4)
-├── storage/               # Almacenamiento (no LLM)
-└── shared/                # Componentes compartidos
+├── orchestrator/      # Coordinación del flujo de búsqueda
+├── websearcher/       # Integración con OpenRouter web_search
+├── pageloader/        # Descarga de HTML
+├── dataextractor/     # Extracción de productos desde HTML
+├── validator/         # Validación determinística de resultados
+├── storage/           # Persistencia auxiliar para agentes
+├── shared/            # Tipos compartidos
+├── openrouter.go      # Cliente OpenRouter y tool wiring
+└── config.go          # Defaults de LLM y search config
 ```
 
-## Flujo de Trabajo
+## Defaults actuales
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   ORCHESTRATOR AGENT                        │
-│              (xiaomi/mimo-v2-flash via OpenRouter)          │
-│  - Coordinación de flujo                                    │
-│  - Delegación de tareas                                     │
-└─────────────────────────────────────────────────────────────┘
-                          │
-        ┌─────────────────┼─────────────────┐
-        │                 │                 │
-        ▼                 ▼                 ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│ URL FINDER   │  │ PAGE LOADER  │  │ DATA EXTRACT │
-│  (Gemma4)    │  │  (HTTP)      │  │  (Gemma4)    │
-│              │  │              │  │              │
-│ Busca URLs   │  │ Descarga     │  │ Extrae       │
-│ en la web    │  │ HTML         │  │ datos        │
-└──────────────┘  └──────────────┘  └──────────────┘
-                          │
-                          ▼
-                   ┌──────────┐
-                   │ VALIDATE │
-                   │  (Gemma4)│
-                   │          │
-                   │ Valida   │
-                   │ datos    │
-                   └──────────┘
-                          │
-                          ▼
-                   ┌──────────┐
-                   │ STORAGE  │
-                   │  (DB)    │
-                   │          │
-                   └──────────┘
+Definidos en `config.go`:
+
+- Orchestrator: `openrouter:xiaomi/mimo-v2-flash`
+- Web Searcher: `openrouter:nvidia/nemotron-3-super-120b-a12b:free`
+- Data Extractor: `openrouter:xiaomi/mimo-v2-flash`
+
+## Flujo actual
+
+```text
+Orchestrator
+  ↓
+Web Searcher
+  ↓
+Page Loader
+  ↓
+Data Extractor
+  ↓
+Validator
+  ↓
+Storage / DB
 ```
 
-## Beneficios de la Nueva Arquitectura
+## Notas por componente
 
-### 1. Contexto Reducido por Tarea
+### Web Searcher
 
-| Agente | Tarea | Contexto | Carga de LLM |
-|--------|-------|----------|--------------|
-| URL Finder | Buscar URLs | Query del producto | 🟢 Baja |
-| Page Loader | Descargar HTML | URL (no usa LLM) | ⚪ N/A |
-| Data Extractor | Extraer datos | HTML de una sección | 🟢 Baja |
-| Validator | Validar datos | Resultados extraídos | 🟢 Baja |
-| Orchestrator | Coordinar todo | Flujo completo | 🟡 Media |
+- Usa OpenRouter `openrouter:web_search`
+- Filtra resultados a dominios argentinos configurados
+- En la práctica necesita OpenRouter para funcionar como está documentado el proyecto
 
-### 2. Mejor Control de Errores
+### Data Extractor
 
-Cada paso es independiente y se puede debuggear por separado.
+- Usa un pipeline con varias estrategias
+- Puede correr con OpenRouter o con Ollama según `PRICE_NEXUS_DATAEXTRACTOR_LLM`
+- Default actual: OpenRouter
 
-### 3. Tareas Reutilizables
+### Validator
 
-- **Page Loader**: Reusable para cualquier scraper
-- **Data Extractor**: Reusable para cualquier tienda
-- **Validator**: Reusable para cualquier validación
+- La implementación actual no usa activamente un LLM
+- Normaliza campos y descarta resultados inválidos
 
-## Uso
+## Configuración soportada
 
-### Búsqueda de productos
-
-```go
-import (
-    "context"
-    "github.com/dyallo/pricenexus/internal/agent/orchestrator"
-    "github.com/sirupsen/logrus"
-)
-
-func main() {
-    logger := logrus.New()
-    orch, err := orchestrator.NewOrchestrator("prices.db", logger)
-    if err != nil {
-        panic(err)
-    }
-    defer orch.Close()
-
-    results, err := orch.Search(context.Background(), "Game Stick Lite")
-    if err != nil {
-        panic(err)
-    }
-
-    for _, r := range results {
-        fmt.Printf("%s: $%.2f %s\n", r.ProductName, r.Price, r.Currency)
-    }
-}
-```
-
-### Historial de precios
-
-```go
-history, err := orch.GetHistory(context.Background(), "Game Stick Lite")
-```
-
-## Tests
-
-Ejecutar tests:
+Variables relevantes:
 
 ```bash
-go test ./internal/agent/...
+PRICE_NEXUS_ORCHESTRATOR_LLM=openrouter:xiaomi/mimo-v2-flash
+PRICE_NEXUS_WEBSEARCHER_LLM=openrouter:nvidia/nemotron-3-super-120b-a12b:free
+PRICE_NEXUS_DATAEXTRACTOR_LLM=openrouter:xiaomi/mimo-v2-flash
+PRICE_NEXUS_WEBSEARCH_ALLOWED_DOMAINS=.com.ar,.ar
+PRICE_NEXUS_WEBSEARCH_MAX_RESULTS=10
+PRICE_NEXUS_DEFAULT_CURRENCY=ARS
+OPENROUTER_API_KEY=tu_api_key
 ```
 
-## Próximos Pasos
+Si querés extracción local:
 
-1. Implementar parsing real de JSON en Data Extractor
-2. Añadir herramientas específicas para cada tienda
-3. Implementar caching de resultados
-4. Añadir rate limiting
+```bash
+PRICE_NEXUS_DATAEXTRACTOR_LLM=ollama:gemma4:e4b
+ollama serve
+ollama pull gemma4:e4b
+```
