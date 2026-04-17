@@ -5,16 +5,12 @@ import (
 	"testing"
 
 	"github.com/dyallo/pricenexus/internal/agent/shared"
-	"github.com/tmc/langchaingo/llms/ollama"
 )
 
 func TestNewValidatorAgent(t *testing.T) {
-	llm, err := ollama.New(ollama.WithModel("phi3:mini"))
-	if err != nil {
-		t.Skip("Ollama not available, skipping test")
-	}
+	t.Parallel()
 
-	agent, err := NewValidatorAgent(llm)
+	agent, err := NewValidatorAgent(nil)
 	if err != nil {
 		t.Fatalf("Error creating validator agent: %v", err)
 	}
@@ -24,30 +20,38 @@ func TestNewValidatorAgent(t *testing.T) {
 }
 
 func TestValidatorValidate(t *testing.T) {
-	llm, err := ollama.New(ollama.WithModel("phi3:mini"))
-	if err != nil {
-		t.Skip("Ollama not available, skipping test")
-	}
+	t.Parallel()
 
-	agent, err := NewValidatorAgent(llm)
+	agent, err := NewValidatorAgent(nil)
 	if err != nil {
 		t.Fatalf("Error creating validator agent: %v", err)
 	}
 
 	results := []shared.SearchResult{
 		{
+			SearchTerm:  "ps5",
 			ProductName: "Test Product",
 			Price:       100.50,
 			Currency:    "ARS",
 			URL:         "https://example.com",
+			ShopName:    "Test Shop",
 			HasStock:    true,
 			HasShipping: true,
+		},
+		{
+			SearchTerm:  "ps5",
+			ProductName: "",
+			Price:       -10,
+			URL:         "notaurl",
 		},
 	}
 
 	validated, err := agent.Validate(context.Background(), results)
 	if err != nil {
-		t.Logf("Expected error with Ollama: %v", err)
+		t.Fatalf("Validate() unexpected error: %v", err)
 	}
-	_ = validated
+
+	if len(validated) != 1 {
+		t.Fatalf("expected 1 validated result, got %d", len(validated))
+	}
 }

@@ -2,6 +2,8 @@ package db
 
 import (
 	"os"
+	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/dyallo/pricenexus/internal/models"
@@ -13,11 +15,14 @@ import (
 type Repository interface {
 	Init() error
 	GetAllShops() ([]models.Shop, error)
+	GetShopByID(id int) (models.Shop, error)
+	GetShopByName(name string) (models.Shop, error)
 	AddShop(shop models.Shop) (int64, error)
 	GetProduct(searchTerm string) (models.Product, error)
 	AddProduct(product models.Product) (int64, error)
 	AddPrice(price models.Price) (int64, error)
 	GetPricesByProduct(productID int) ([]models.Price, error)
+	GetPriceHistoryByProduct(productID int) ([]models.Price, error)
 	Close() error
 }
 
@@ -45,10 +50,9 @@ func NewRepository(dbPath string, log *logrus.Logger) (Repository, error) {
 }
 
 func (r *sqliteRepository) applyMigrations() error {
-	migrationFile := "migrations/001_init.sql"
-
-	if _, err := os.Stat(migrationFile); err != nil {
-		migrationFile = "../migrations/001_init.sql"
+	migrationFile, err := findMigrationFile()
+	if err != nil {
+		return err
 	}
 
 	migration, err := os.ReadFile(migrationFile)
@@ -68,6 +72,18 @@ func (r *sqliteRepository) GetAllShops() ([]models.Shop, error) {
 	var shops []models.Shop
 	err := r.db.Select(&shops, "SELECT id, name, url, active FROM shops WHERE active = 1")
 	return shops, err
+}
+
+func (r *sqliteRepository) GetShopByID(id int) (models.Shop, error) {
+	var shop models.Shop
+	err := r.db.Get(&shop, "SELECT id, name, url, active FROM shops WHERE id = ?", id)
+	return shop, err
+}
+
+func (r *sqliteRepository) GetShopByName(name string) (models.Shop, error) {
+	var shop models.Shop
+	err := r.db.Get(&shop, "SELECT id, name, url, active FROM shops WHERE lower(name) = lower(?) LIMIT 1", name)
+	return shop, err
 }
 
 func (r *sqliteRepository) AddShop(shop models.Shop) (int64, error) {
@@ -130,6 +146,38 @@ func (r *sqliteRepository) GetPricesByProduct(productID int) ([]models.Price, er
 	return prices, err
 }
 
+func (r *sqliteRepository) GetPriceHistoryByProduct(productID int) ([]models.Price, error) {
+	var prices []models.Price
+	err := r.db.Select(&prices,
+		`SELECT id, product_id, shop_id, price, currency, has_stock, has_shipping, url, scraped_at
+		 FROM price_history WHERE product_id = ? ORDER BY scraped_at DESC`,
+		productID)
+	return prices, err
+}
+
 func (r *sqliteRepository) Close() error {
 	return r.db.Close()
+}
+
+func findMigrationFile() (string, error) {
+	candidates := []string{
+		"migrations/001_init.sql",
+		"../migrations/001_init.sql",
+	}
+
+	if _, file, _, ok := runtime.Caller(0); ok {
+		baseDir := filepath.Dir(file)
+		candidates = append(candidates,
+			filepath.Join(baseDir, "../../migrations/001_init.sql"),
+			filepath.Join(baseDir, "../../../migrations/001_init.sql"),
+		)
+	}
+
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+
+	return "", os.ErrNotExist
 }

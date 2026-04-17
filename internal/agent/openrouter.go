@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tmc/langchaingo/llms"
@@ -47,23 +49,53 @@ func NewOpenRouterModel(apiKey, model string) *OpenRouterModel {
 	}
 }
 
-// AddWebSearchTool adds the OpenRouter web_search tool for Argentine domains
-func (m *OpenRouterModel) AddWebSearchTool() {
+// AddWebSearchTool adds the OpenRouter web_search tool using runtime configuration.
+func (m *OpenRouterModel) AddWebSearchTool(config SearchConfig) {
+	if len(config.AllowedDomains) == 0 || len(config.ExcludedDomains) == 0 || config.SearchEngine == "" || config.MaxResults <= 0 {
+		defaultConfig := DefaultSearchConfig()
+		if len(config.AllowedDomains) == 0 {
+			config.AllowedDomains = defaultConfig.AllowedDomains
+		}
+		if len(config.ExcludedDomains) == 0 {
+			config.ExcludedDomains = defaultConfig.ExcludedDomains
+		}
+		if strings.TrimSpace(config.SearchEngine) == "" {
+			config.SearchEngine = defaultConfig.SearchEngine
+		}
+		if config.MaxResults <= 0 {
+			config.MaxResults = defaultConfig.MaxResults
+		}
+	}
+
 	m.Tools = append(m.Tools, Tool{
 		Type: "openrouter:web_search",
 		Parameters: map[string]interface{}{
-			"allowed_domains": []string{".com.ar", ".ar"},
-			"max_results":     10,
+			"engine":           config.SearchEngine,
+			"allowed_domains":  config.AllowedDomains,
+			"excluded_domains": config.ExcludedDomains,
+			"max_results":      config.MaxResults,
 		},
 	})
 }
 
 // OpenRouterRequest represents the request body for the OpenRouter API.
 type OpenRouterRequest struct {
-	Model     string              `json:"model"`
-	Messages  []OpenRouterMessage `json:"messages"`
-	Tools     []Tool              `json:"tools,omitempty"`
-	SessionID string              `json:"session_id,omitempty"`
+	Model          string                    `json:"model"`
+	Messages       []OpenRouterMessage       `json:"messages"`
+	Tools          []Tool                    `json:"tools,omitempty"`
+	SessionID      string                    `json:"session_id,omitempty"`
+	ResponseFormat *OpenRouterResponseFormat `json:"response_format,omitempty"`
+}
+
+type OpenRouterResponseFormat struct {
+	Type       string                `json:"type"`
+	JSONSchema *OpenRouterJSONSchema `json:"json_schema,omitempty"`
+}
+
+type OpenRouterJSONSchema struct {
+	Name   string         `json:"name"`
+	Strict bool           `json:"strict,omitempty"`
+	Schema map[string]any `json:"schema"`
 }
 
 // OpenRouterMessage represents a single message in the chat history.
@@ -106,29 +138,70 @@ func (m *OpenRouterModel) Call(ctx context.Context, prompt string, options ...ll
 	return resp.Choices[0].Content, nil
 }
 
+func (m *OpenRouterModel) CallWithJSONSchema(
+	ctx context.Context,
+	prompt string,
+	schemaName string,
+	schema map[string]any,
+) (string, error) {
+	messages := []llms.MessageContent{
+		llms.TextParts(llms.ChatMessageTypeHuman, prompt),
+	}
+
+	resp, err := m.generateContentWithRequest(
+		ctx,
+		messages,
+		&OpenRouterResponseFormat{
+			Type: "json_schema",
+			JSONSchema: &OpenRouterJSONSchema{
+				Name:   schemaName,
+				Strict: true,
+				Schema: schema,
+			},
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("no choices returned from model")
+	}
+
+	return resp.Choices[0].Content, nil
+}
+
 // GenerateContent implements the llms.Model interface with tool support.
 func (m *OpenRouterModel) GenerateContent(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error) {
+	return m.generateContentWithRequest(ctx, messages, nil)
+}
+
+func (m *OpenRouterModel) generateContentWithRequest(
+	ctx context.Context,
+	messages []llms.MessageContent,
+	responseFormat *OpenRouterResponseFormat,
+) (*llms.ContentResponse, error) {
 	// Convert langchaingo messages to OpenRouter format
-	var reqMessages []OpenRouterMessage
+	reqMessages := make([]OpenRouterMessage, 0, len(messages))
 	for _, msg := range messages {
-		var content string
+		var contentBuilder strings.Builder
 		for _, part := range msg.Parts {
 			if text, ok := part.(llms.TextContent); ok {
-				content += text.Text
+				contentBuilder.WriteString(text.Text)
 			}
 		}
 		reqMessages = append(reqMessages, OpenRouterMessage{
-			Role:    string(msg.Role),
-			Content: content,
+			Role:    mapOpenRouterRole(msg.Role),
+			Content: contentBuilder.String(),
 		})
 	}
 
 	// Prepare the request payload
 	payload := OpenRouterRequest{
-		Model:     m.Model,
-		Messages:  reqMessages,
-		Tools:     m.Tools,
-		SessionID: m.SessionID,
+		Model:          m.Model,
+		Messages:       reqMessages,
+		Tools:          m.Tools,
+		SessionID:      m.SessionID,
+		ResponseFormat: responseFormat,
 	}
 
 	body, err := json.Marshal(payload)
@@ -136,23 +209,25 @@ func (m *OpenRouterModel) GenerateContent(ctx context.Context, messages []llms.M
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// Create the HTTP request
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewBuffer(body))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	// Set required headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", m.APIKey))
-	// OpenRouter likes to know the app name for rankings
-	req.Header.Set("HTTP-Referer", "https://pricenexus.ai")
-	req.Header.Set("X-Title", "PriceNexus")
-
 	// Execute the request with retry logic for transient errors
 	var resp *http.Response
 
 	for attempt := 0; attempt <= m.MaxRetries; attempt++ {
+		req, err := http.NewRequestWithContext(
+			ctx,
+			"POST",
+			"https://openrouter.ai/api/v1/chat/completions",
+			bytes.NewReader(body),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", m.APIKey))
+		req.Header.Set("HTTP-Referer", "https://pricenexus.ai")
+		req.Header.Set("X-Title", "PriceNexus")
+
 		resp, err = m.Client.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("HTTP request failed: %w", err)
@@ -177,7 +252,21 @@ func (m *OpenRouterModel) GenerateContent(ctx context.Context, messages []llms.M
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("OpenRouter API returned non-OK status: %d", resp.StatusCode)
+		responseBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("OpenRouter API returned non-OK status: %d", resp.StatusCode)
+		}
+
+		trimmedBody := strings.TrimSpace(string(responseBody))
+		if trimmedBody == "" {
+			return nil, fmt.Errorf("OpenRouter API returned non-OK status: %d", resp.StatusCode)
+		}
+
+		return nil, fmt.Errorf(
+			"OpenRouter API returned non-OK status: %d: %s",
+			resp.StatusCode,
+			trimmedBody,
+		)
 	}
 
 	// Decode the response
@@ -198,19 +287,7 @@ func (m *OpenRouterModel) GenerateContent(ctx context.Context, messages []llms.M
 	choice := openRouterResp.Choices[0].Message
 
 	// Extract content - handle both string and array formats
-	var contentStr string
-	if content, ok := choice.Content.(string); ok {
-		contentStr = content
-	} else if contentArray, ok := choice.Content.([]interface{}); ok {
-		// If content is an array, extract text parts
-		for _, item := range contentArray {
-			if itemMap, ok := item.(map[string]interface{}); ok {
-				if text, ok := itemMap["text"].(string); ok {
-					contentStr += text
-				}
-			}
-		}
-	}
+	contentStr := extractOpenRouterContent(choice.Content)
 
 	return &llms.ContentResponse{
 		Choices: []*llms.ContentChoice{
@@ -219,4 +296,47 @@ func (m *OpenRouterModel) GenerateContent(ctx context.Context, messages []llms.M
 			},
 		},
 	}, nil
+}
+
+func extractOpenRouterContent(content any) string {
+	switch value := content.(type) {
+	case string:
+		return value
+	case []interface{}:
+		var builder strings.Builder
+		for _, item := range value {
+			itemMap, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			if text, ok := itemMap["text"].(string); ok {
+				builder.WriteString(text)
+			}
+
+			if nestedText, ok := itemMap["content"].(string); ok {
+				builder.WriteString(nestedText)
+			}
+		}
+		return builder.String()
+	default:
+		return ""
+	}
+}
+
+func mapOpenRouterRole(role llms.ChatMessageType) string {
+	switch strings.ToLower(string(role)) {
+	case "system":
+		return "system"
+	case "ai", "assistant":
+		return "assistant"
+	case "human", "user":
+		return "user"
+	case "tool":
+		return "tool"
+	case "function":
+		return "function"
+	default:
+		return string(role)
+	}
 }

@@ -10,6 +10,7 @@ const (
 )
 
 type SearchResult struct {
+	SearchTerm  string  `json:"search_term"`
 	ProductName string  `json:"product_name"`
 	Price       float64 `json:"price"`
 	Currency    string  `json:"currency"`

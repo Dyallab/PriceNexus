@@ -2,51 +2,189 @@ package websearcher
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/url"
+	"regexp"
 	"strings"
 
+	agentruntime "github.com/dyallo/pricenexus/internal/agent"
 	"github.com/dyallo/pricenexus/internal/agent/shared"
 	"github.com/sirupsen/logrus"
 	"github.com/tmc/langchaingo/llms"
 )
 
+type urlResult struct {
+	URL     string `json:"url"`
+	Title   string `json:"title,omitempty"`
+	Snippet string `json:"snippet,omitempty"`
+}
+
+type urlSearchResponse struct {
+	URLs []urlResult `json:"urls"`
+}
+
+const urlSchemaName = "url_search_result"
+
+var excludedStoreDomains = []string{"mercadolibre.com.ar"}
+
+var urlSearchSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"urls": map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"url": map[string]any{
+						"type": "string",
+					},
+					"title": map[string]any{
+						"type": "string",
+					},
+					"snippet": map[string]any{
+						"type": "string",
+					},
+				},
+				"required": []any{"url"},
+			},
+		},
+	},
+	"required": []any{"urls"},
+}
+
+const schemaFirstSearchPrompt = `Search for online stores selling "%s" in Argentina.
+You must use the web search tool to find relevant product pages from Argentine online stores (.com.ar or .ar domains).
+Focus on finding specific product pages or store search results.
+Return a JSON object with a "urls" array containing objects with "url" (required), "title" (optional), and "snippet" (optional) fields.
+Only include URLs from Argentine domains (.com.ar or .ar).`
+
+const proseFallbackSearchPrompt = `Search for online stores selling "%s" in Argentina.
+You must use the web search tool to find relevant product pages from Argentine online stores.
+List all URLs you found from .com.ar or .ar domains, one per line.
+Only include URLs from Argentine domains.`
+
 // WebSearcherAgent searches the web for relevant store URLs and product pages
 // using OpenRouter's web_search server tool
 type WebSearcherAgent struct {
-	llm    llms.Model
-	logger *logrus.Logger
+	llm             llms.Model
+	logger          *logrus.Logger
+	allowedDomains  []string
+	defaultCurrency string
 }
 
 // NewWebSearcherAgent creates a new WebSearcherAgent with OpenRouter web_search capabilities
-func NewWebSearcherAgent(llm llms.Model) (*WebSearcherAgent, error) {
+func NewWebSearcherAgent(llm llms.Model, allowedDomains []string, defaultCurrency string) (*WebSearcherAgent, error) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.DebugLevel)
+	if strings.TrimSpace(defaultCurrency) == "" {
+		defaultCurrency = "ARS"
+	}
 	return &WebSearcherAgent{
-		llm:    llm,
-		logger: logger,
+		llm:             llm,
+		logger:          logger,
+		allowedDomains:  normalizeAllowedDomains(allowedDomains),
+		defaultCurrency: strings.ToUpper(strings.TrimSpace(defaultCurrency)),
 	}, nil
 }
 
-// Search performs a web search for the given query using OpenRouter's web_search tool
+// Search performs a web search for the given query using OpenRouter's web_search tool.
+// It first attempts to use structured JSON schema output, then falls back to text parsing.
 func (w *WebSearcherAgent) Search(ctx context.Context, query string) ([]shared.SearchResult, error) {
-	// Create a prompt that instructs the LLM to search for products in Argentina
-	prompt := fmt.Sprintf(`Search for online stores selling "%s" in Argentina.
-You must use the web search tool to find relevant product pages from Argentine online stores.
-Focus on finding specific product pages or store search results from Argentine stores (.com.ar or .ar domains).
-For each result found, list the URL clearly.
-Return the URLs you found.`, query)
+	var results []shared.SearchResult
+	var err error
 
-	// Call the model which will use the web_search tool
+	results, err = w.searchWithSchema(ctx, query)
+	if err != nil {
+		w.logger.Debugf("Schema-based search failed: %v", err)
+	}
+
+	if len(results) == 0 {
+		w.logger.Debug("Schema search yielded no results, falling back to text parsing")
+		results, err = w.searchWithTextFallback(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	w.logger.Debugf("Final result count: %d", len(results))
+	return results, nil
+}
+
+func (w *WebSearcherAgent) searchWithSchema(ctx context.Context, query string) ([]shared.SearchResult, error) {
+	prompt := fmt.Sprintf(schemaFirstSearchPrompt, query)
+
+	openRouterModel, ok := w.llm.(*agentruntime.OpenRouterModel)
+	if !ok {
+		w.logger.Debug("LLM is not an OpenRouterModel, skipping schema-based search")
+		return nil, fmt.Errorf("LLM does not support CallWithJSONSchema")
+	}
+
+	response, err := openRouterModel.CallWithJSONSchema(ctx, prompt, urlSchemaName, urlSearchSchema)
+	if err != nil {
+		return nil, fmt.Errorf("schema-based search failed: %w", err)
+	}
+
+	w.logger.Debugf("Schema response:\n%s", response)
+
+	var structuredResp urlSearchResponse
+	if err := json.Unmarshal([]byte(response), &structuredResp); err != nil {
+		return nil, fmt.Errorf("failed to parse structured response: %w", err)
+	}
+
+	results := w.urlsToSearchResults(structuredResp.URLs, query)
+	if len(results) == 0 {
+		return nil, fmt.Errorf("structured response contained no URLs")
+	}
+
+	return results, nil
+}
+
+func (w *WebSearcherAgent) urlsToSearchResults(urlResults []urlResult, query string) []shared.SearchResult {
+	results := make([]shared.SearchResult, 0, len(urlResults))
+	seen := make(map[string]bool)
+
+	for _, ur := range urlResults {
+		if seen[ur.URL] {
+			continue
+		}
+		if !isAllowedDomain(ur.URL, w.allowedDomains) {
+			w.logger.Debugf("Filtered out non-Argentine URL from schema: %s", ur.URL)
+			continue
+		}
+		seen[ur.URL] = true
+
+		shopName := extractShopName(ur.URL)
+		results = append(results, shared.SearchResult{
+			SearchTerm:  query,
+			ProductName: query,
+			Price:       0,
+			Currency:    w.defaultCurrency,
+			URL:         ur.URL,
+			HasStock:    false,
+			HasShipping: false,
+			ShopName:    shopName,
+		})
+	}
+
+	return results
+}
+
+func (w *WebSearcherAgent) searchWithTextFallback(ctx context.Context, query string) ([]shared.SearchResult, error) {
+	prompt := fmt.Sprintf(proseFallbackSearchPrompt, query)
+
 	response, err := w.llm.Call(ctx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("error searching web: %w", err)
 	}
 
-	w.logger.Debugf("Raw response from LLM:\n%s", response)
+	w.logger.Debugf("Text fallback response:\n%s", response)
 
-	// Parse the response to extract URLs
 	results := w.parseSearchResponse(response, query)
-	w.logger.Debugf("Parsed %d results from response", len(results))
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no URLs found in response")
+	}
+
 	return results, nil
 }
 
@@ -57,18 +195,19 @@ func (w *WebSearcherAgent) SearchStores(ctx context.Context, productQuery string
 
 // parseSearchResponse extracts URLs and product information from the model's response
 func (w *WebSearcherAgent) parseSearchResponse(response string, query string) []shared.SearchResult {
-	var results []shared.SearchResult
+	results := []shared.SearchResult{}
 
 	// Extract URLs from the response
-	urls := extractURLs(response)
+	urls := extractURLsForDomains(response, w.allowedDomains)
 	w.logger.Debugf("Found %d URLs after extraction: %v", len(urls), urls)
 
 	for _, url := range urls {
 		shopName := extractShopName(url)
 		results = append(results, shared.SearchResult{
+			SearchTerm:  query,
 			ProductName: query,
 			Price:       0, // Will be filled by data extractor
-			Currency:    "ARS",
+			Currency:    w.defaultCurrency,
 			URL:         url,
 			HasStock:    false,
 			HasShipping: false,
@@ -81,16 +220,20 @@ func (w *WebSearcherAgent) parseSearchResponse(response string, query string) []
 
 // extractURLs extracts all URLs from the response text
 func extractURLs(text string) []string {
-	var urls []string
+	return extractURLsForDomains(text, []string{".com.ar", ".ar"})
+}
+
+func extractURLsForDomains(text string, allowedDomains []string) []string {
+	urls := []string{}
 	seen := make(map[string]bool)
+
+	text = extractQuotedURLs(text, allowedDomains, &seen, &urls)
 
 	lines := strings.Split(text, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 
-		// Look for URLs starting with http
 		if strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
-			// Extract just the URL part (stop at whitespace or closing bracket)
 			endIdx := strings.IndexAny(line, " \t)")
 			if endIdx == -1 {
 				endIdx = len(line)
@@ -98,31 +241,25 @@ func extractURLs(text string) []string {
 			url := line[:endIdx]
 			url = strings.TrimRight(url, ".,;:!?)\"'")
 
-			// Filter for Argentine domains only
-			if isArgentinianDomain(url) && !seen[url] {
+			if isAllowedDomain(url, allowedDomains) && !seen[url] {
 				urls = append(urls, url)
 				seen[url] = true
 			}
 			continue
 		}
 
-		// Also check for URLs within text
 		if strings.Contains(line, "http") {
 			parts := strings.Fields(line)
 			for _, part := range parts {
 				part = strings.TrimSpace(part)
 				if strings.HasPrefix(part, "http://") || strings.HasPrefix(part, "https://") {
-					// Clean up trailing punctuation
 					part = strings.TrimRight(part, ".,;:!?)\"'")
 
-					// Log all found URLs before filtering
-					if isArgentinianDomain(part) {
+					if isAllowedDomain(part, allowedDomains) {
 						if !seen[part] {
 							urls = append(urls, part)
 							seen[part] = true
 						}
-					} else {
-						logrus.Debugf("Filtered out non-Argentine URL: %s", part)
 					}
 				}
 			}
@@ -132,35 +269,121 @@ func extractURLs(text string) []string {
 	return urls
 }
 
+func extractQuotedURLs(text string, allowedDomains []string, seen *map[string]bool, urls *[]string) string {
+	arPattern := regexp.MustCompile(`"https?://[^"]+\.ar[^"]*"|'https?://[^']+\.ar[^']*'|\(https?://[^)]+\.ar[^)]*\)`)
+	comArPattern := regexp.MustCompile(`"https?://[^"]+\.com\.ar[^"]*"|'https?://[^']+\.com\.ar[^']*'|\(https?://[^)]+\.com\.ar[^)]*\)`)
+
+	matches := comArPattern.FindAllString(text, -1)
+	for _, match := range matches {
+		match = strings.Trim(match, `"'()`)
+		if isAllowedDomain(match, allowedDomains) && !(*seen)[match] {
+			*urls = append(*urls, match)
+			(*seen)[match] = true
+		}
+	}
+	text = comArPattern.ReplaceAllString(text, " ")
+
+	matches = arPattern.FindAllString(text, -1)
+	for _, match := range matches {
+		match = strings.Trim(match, `"'()`)
+		if isAllowedDomain(match, allowedDomains) && !(*seen)[match] {
+			*urls = append(*urls, match)
+			(*seen)[match] = true
+		}
+	}
+	text = arPattern.ReplaceAllString(text, " ")
+
+	return text
+}
+
 // isArgentinianDomain checks if a URL belongs to an Argentine domain
 func isArgentinianDomain(urlStr string) bool {
-	argentinianDomains := []string{
-		".com.ar",
-		".ar/",
+	return isAllowedDomain(urlStr, []string{".com.ar", ".ar"})
+}
+
+func isAllowedDomain(urlStr string, allowedDomains []string) bool {
+	if isExcludedDomain(urlStr, excludedStoreDomains) {
+		return false
 	}
 
-	for _, domain := range argentinianDomains {
-		if strings.Contains(urlStr, domain) {
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return false
+	}
+
+	hostname := strings.ToLower(parsedURL.Hostname())
+	for _, domain := range normalizeAllowedDomains(allowedDomains) {
+		if strings.HasSuffix(hostname, domain) {
 			return true
 		}
 	}
+
 	return false
 }
 
-// extractShopName extracts a readable shop name from a URL
-func extractShopName(url string) string {
-	url = strings.TrimPrefix(url, "https://")
-	url = strings.TrimPrefix(url, "http://")
-	url = strings.TrimPrefix(url, "www.")
+func isExcludedDomain(urlStr string, excludedDomains []string) bool {
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return false
+	}
 
-	parts := strings.Split(url, "/")
-	if len(parts) > 0 {
-		domain := parts[0]
-		// Remove common TLDs
-		domain = strings.ReplaceAll(domain, ".com.ar", "")
-		domain = strings.ReplaceAll(domain, ".com", "")
-		domain = strings.ReplaceAll(domain, ".ar", "")
-		return capitalize(domain)
+	hostname := strings.ToLower(parsedURL.Hostname())
+	for _, domain := range excludedDomains {
+		normalized := strings.ToLower(strings.TrimSpace(domain))
+		normalized = strings.TrimPrefix(normalized, ".")
+		if normalized == "" {
+			continue
+		}
+		if hostname == normalized || strings.HasSuffix(hostname, "."+normalized) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func normalizeAllowedDomains(domains []string) []string {
+	if len(domains) == 0 {
+		return []string{".com.ar", ".ar"}
+	}
+
+	result := make([]string, 0, len(domains))
+	seen := make(map[string]struct{}, len(domains))
+	for _, domain := range domains {
+		normalized := strings.ToLower(strings.TrimSpace(domain))
+		if normalized == "" {
+			continue
+		}
+		if !strings.HasPrefix(normalized, ".") {
+			normalized = "." + normalized
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+
+	if len(result) == 0 {
+		return []string{".com.ar", ".ar"}
+	}
+
+	return result
+}
+
+// extractShopName extracts a readable shop name from a URL
+func extractShopName(rawURL string) string {
+	parsedURL, err := url.Parse(rawURL)
+	if err == nil {
+		hostname := strings.TrimPrefix(parsedURL.Hostname(), "www.")
+		if hostname != "" && strings.Contains(hostname, ".") {
+			hostname = strings.TrimSuffix(hostname, ".com.ar")
+			hostname = strings.TrimSuffix(hostname, ".com")
+			hostname = strings.TrimSuffix(hostname, ".ar")
+			if hostname != "" {
+				return capitalize(hostname)
+			}
+		}
 	}
 
 	return "Unknown"

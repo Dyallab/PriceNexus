@@ -3,50 +3,57 @@ package validator
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/dyallo/pricenexus/internal/agent/shared"
-	"github.com/tmc/langchaingo/agents"
 	"github.com/tmc/langchaingo/llms"
-	"github.com/tmc/langchaingo/tools"
 )
 
-type ValidatorAgent struct {
-	executor *agents.Executor
-	llm      llms.Model
-}
+type ValidatorAgent struct{}
 
 func NewValidatorAgent(llm llms.Model) (*ValidatorAgent, error) {
-	toolList := []tools.Tool{}
-
-	agent := agents.NewOneShotAgent(llm, toolList)
-	executor := agents.NewExecutor(agent)
-
-	return &ValidatorAgent{
-		executor: executor,
-		llm:      llm,
-	}, nil
+	_ = llm
+	return &ValidatorAgent{}, nil
 }
 
 func (v *ValidatorAgent) Validate(ctx context.Context, results []shared.SearchResult) ([]shared.SearchResult, error) {
-	prompt := fmt.Sprintf(
-		"Valida estos resultados de productos. "+
-			"Filtra resultados inválidos (precios negativos, URLs inválidas, etc.). "+
-			"Responde solo con los resultados válidos en formato JSON. "+
-			"Resultados: %+v",
-		results,
-	)
+	_ = ctx
 
-	result, err := v.executor.Call(ctx, map[string]any{"input": prompt})
-	if err != nil {
-		return nil, fmt.Errorf("error validating data: %w", err)
+	validated := make([]shared.SearchResult, 0, len(results))
+	for _, result := range results {
+		item := result
+		item.SearchTerm = strings.TrimSpace(item.SearchTerm)
+		item.ProductName = strings.TrimSpace(item.ProductName)
+		item.ShopName = strings.TrimSpace(item.ShopName)
+		item.URL = strings.TrimSpace(item.URL)
+		item.Currency = strings.ToUpper(strings.TrimSpace(item.Currency))
+
+		if item.SearchTerm == "" {
+			item.SearchTerm = item.ProductName
+		}
+		if item.ProductName == "" || item.SearchTerm == "" {
+			continue
+		}
+		if item.Price <= 0 {
+			continue
+		}
+		if item.URL == "" {
+			continue
+		}
+		if _, err := url.ParseRequestURI(item.URL); err != nil {
+			continue
+		}
+		if item.Currency == "" {
+			item.Currency = "ARS"
+		}
+
+		validated = append(validated, item)
 	}
 
-	output, ok := result["output"].(string)
-	if !ok {
-		return nil, fmt.Errorf("expected string output, got %T", result["output"])
+	if len(validated) == 0 {
+		return nil, fmt.Errorf("no valid results after validation")
 	}
 
-	_ = output
-
-	return results, nil
+	return validated, nil
 }

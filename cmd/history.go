@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/dyallo/pricenexus/internal/db"
 	"github.com/sirupsen/logrus"
@@ -29,7 +30,7 @@ var historyCmd = &cobra.Command{
 			return
 		}
 
-		prices, err := repo.GetPricesByProduct(product.ID)
+		prices, err := repo.GetPriceHistoryByProduct(product.ID)
 		if err != nil {
 			fmt.Printf("Error obteniendo precios: %v\n", err)
 			return
@@ -42,19 +43,20 @@ var historyCmd = &cobra.Command{
 			return
 		}
 
-		shopNames := map[int]string{
-			1: "MercadoLibre",
-			2: "Garbarino",
-			3: "Tecnoshops",
-		}
-
 		for _, p := range prices {
-			shopName := shopNames[p.ShopID]
-			if shopName == "" {
-				shopName = fmt.Sprintf("Tienda %d", p.ShopID)
+			shopName := fmt.Sprintf("Tienda %d", p.ShopID)
+			shop, err := repo.GetShopByID(p.ShopID)
+			if err == nil && shop.Name != "" {
+				shopName = shop.Name
 			}
+
+			scrapedAt := p.ScrapedAt
+			if parsedTime, err := time.Parse(time.RFC3339, p.ScrapedAt); err == nil {
+				scrapedAt = parsedTime.Format("2006-01-02 15:04")
+			}
+
 			fmt.Printf("[%s] $%.2f %s - %s\n",
-				shopName, p.Price, p.Currency, p.ScrapedAt.Format("2006-01-02 15:04"))
+				shopName, p.Price, p.Currency, scrapedAt)
 		}
 	},
 }

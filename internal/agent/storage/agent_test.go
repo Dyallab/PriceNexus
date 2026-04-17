@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/dyallo/pricenexus/internal/agent/shared"
@@ -8,12 +10,14 @@ import (
 )
 
 func TestNewStorageAgent(t *testing.T) {
-	logger := logrus.New()
+	t.Parallel()
 
-	agent, err := NewStorageAgent(":memory:", logger)
+	logger := logrus.New()
+	dbPath := filepath.Join(t.TempDir(), "prices.db")
+
+	agent, err := NewStorageAgent(dbPath, logger)
 	if err != nil {
-		t.Logf("Expected error with in-memory DB and migrations: %v", err)
-		t.Skip("Skipping test due to migration path issues")
+		t.Fatalf("NewStorageAgent() unexpected error: %v", err)
 	}
 	if agent == nil {
 		t.Fatal("Agent should not be nil")
@@ -21,46 +25,85 @@ func TestNewStorageAgent(t *testing.T) {
 	defer agent.Close()
 }
 
-func TestSavePrices(t *testing.T) {
+func TestSavePricesAndGetHistory(t *testing.T) {
+	t.Parallel()
+
+	logger := logrus.New()
+	dbPath := filepath.Join(t.TempDir(), "prices.db")
+	agent, err := NewStorageAgent(dbPath, logger)
+	if err != nil {
+		t.Fatalf("NewStorageAgent() unexpected error: %v", err)
+	}
+	defer agent.Close()
+
 	prices := []shared.SearchResult{
 		{
+			SearchTerm:  "ps5",
 			ProductName: "Test Product",
 			Price:       100.50,
 			Currency:    "ARS",
-			URL:         "https://example.com",
+			URL:         "https://example.com/product",
 			HasStock:    true,
 			HasShipping: true,
 			ShopName:    "Test Shop",
 		},
 	}
 
-	if len(prices) != 1 {
-		t.Errorf("Expected 1 price, got %d", len(prices))
+	if err := agent.SavePrices(context.Background(), prices); err != nil {
+		t.Fatalf("SavePrices() unexpected error: %v", err)
 	}
 
-	price := prices[0]
-	if price.ProductName != "Test Product" {
-		t.Errorf("Expected product name 'Test Product', got '%s'", price.ProductName)
+	history, err := agent.GetHistory(context.Background(), "ps5")
+	if err != nil {
+		t.Fatalf("GetHistory() unexpected error: %v", err)
 	}
-	if price.Price != 100.50 {
-		t.Errorf("Expected price 100.50, got %f", price.Price)
+
+	if len(history) != 1 {
+		t.Fatalf("expected 1 history result, got %d", len(history))
+	}
+
+	if history[0].ShopName != "Test Shop" {
+		t.Fatalf("expected shop name Test Shop, got %q", history[0].ShopName)
+	}
+	if history[0].SearchTerm != "ps5" {
+		t.Fatalf("expected search term ps5, got %q", history[0].SearchTerm)
 	}
 }
 
-func TestGetHistory(t *testing.T) {
-	history := []shared.SearchResult{
+func TestGetHistoryReturnsPriceHistoryRows(t *testing.T) {
+	t.Parallel()
+
+	logger := logrus.New()
+	dbPath := filepath.Join(t.TempDir(), "prices.db")
+	agent, err := NewStorageAgent(dbPath, logger)
+	if err != nil {
+		t.Fatalf("NewStorageAgent() unexpected error: %v", err)
+	}
+	defer agent.Close()
+
+	prices := []shared.SearchResult{
 		{
-			ProductName: "Test Product",
-			Price:       90.00,
+			SearchTerm:  "monitor 24",
+			ProductName: "Monitor 24 pulgadas",
+			Price:       90000,
 			Currency:    "ARS",
-			URL:         "https://example.com",
+			URL:         "https://tienda.example.com.ar/monitor",
 			HasStock:    true,
 			HasShipping: true,
-			ShopName:    "Test Shop",
+			ShopName:    "Example",
 		},
 	}
 
+	if err := agent.SavePrices(context.Background(), prices); err != nil {
+		t.Fatalf("SavePrices() unexpected error: %v", err)
+	}
+
+	history, err := agent.GetHistory(context.Background(), "monitor 24")
+	if err != nil {
+		t.Fatalf("GetHistory() unexpected error: %v", err)
+	}
+
 	if len(history) == 0 {
-		t.Error("Expected non-empty history")
+		t.Fatal("expected non-empty history")
 	}
 }
