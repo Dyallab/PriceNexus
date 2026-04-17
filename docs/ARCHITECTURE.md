@@ -1,94 +1,93 @@
-# PriceNexus - Arquitectura Multi-Agente
+# Arquitectura de PriceNexus
 
-## Resumen Ejecutivo
+## Resumen
 
-PriceNexus es un sistema multi-agente para búsqueda y tracking de precios en tiendas argentinas. Usa LangChain Go y OpenRouter's web_search server tool para encontrar dinámicamente productos en línea.
+PriceNexus es un CLI en Go que busca productos en tiendas argentinas, descarga las páginas encontradas, extrae datos de producto y persiste resultados históricos en SQLite.
 
-## Arquitectura Actual
+La arquitectura sigue un flujo multi-componente:
 
-### Agentes Especializados
+1. **Orchestrator** coordina
+2. **Web Searcher** descubre URLs con `openrouter:web_search`
+3. **Page Loader** descarga HTML
+4. **Data Extractor** intenta extraer productos con varias estrategias
+5. **Validator** normaliza y filtra resultados válidos
+6. **Storage** persiste en SQLite
 
+## Componentes
+
+### Orchestrator
+
+- Archivo principal: `internal/agent/orchestrator/orchestrator.go`
+- Crea y coordina el resto de los componentes
+- Usa la configuración cargada desde `internal/agent/config.go`
+
+### Web Searcher
+
+- Archivo principal: `internal/agent/websearcher/agent.go`
+- Usa OpenRouter `openrouter:web_search`
+- Aplica filtros de dominios permitidos y resultados máximos
+- Default actual: `openrouter:nvidia/nemotron-3-super-120b-a12b:free`
+
+### Page Loader
+
+- Ubicación: `internal/agent/pageloader/`
+- Descarga contenido HTML
+- No usa LLM
+
+### Data Extractor
+
+- Archivo principal: `internal/agent/dataextractor/agent.go`
+- Default actual: `openrouter:xiaomi/mimo-v2-flash`
+- Soporta extractor local con Ollama si se configura `PRICE_NEXUS_DATAEXTRACTOR_LLM=ollama:...`
+- Tiene un pipeline por capas:
+  - extracción de structured data
+  - content finder con LLM
+  - fallback de gentle cleaning
+
+### Validator
+
+- Archivo principal: `internal/agent/validator/agent.go`
+- La implementación actual es determinística
+- Normaliza strings, currency, URLs y descarta resultados inválidos
+- Aunque el constructor acepta un `llms.Model`, hoy no usa activamente un LLM en la validación
+
+### Storage
+
+- Persistencia en SQLite
+- Repositorio bajo `internal/db/`
+
+## Defaults actuales
+
+Definidos en `internal/agent/config.go`:
+
+| Componente | Default |
+|---|---|
+| Orchestrator | `openrouter:xiaomi/mimo-v2-flash` |
+| Web Searcher | `openrouter:nvidia/nemotron-3-super-120b-a12b:free` |
+| Data Extractor | `openrouter:xiaomi/mimo-v2-flash` |
+
+## Configuración de búsqueda
+
+Defaults del search config:
+
+- `allowed_domains`: `.com.ar`, `.ar`
+- `excluded_domains`: `mercadolibre.com.ar`
+- `max_results`: `10`
+- `default_currency`: `ARS`
+
+Variables relacionadas:
+
+```bash
+PRICE_NEXUS_WEBSEARCH_ALLOWED_DOMAINS=.com.ar,.ar
+PRICE_NEXUS_WEBSEARCH_MAX_RESULTS=10
+PRICE_NEXUS_DEFAULT_CURRENCY=ARS
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                   ORCHESTRATOR AGENT                        │
-│              (xiaomi/mimo-v2-flash via OpenRouter)          │
-│  - Coordina flujos de trabajo                              │
-│  - Delega tareas a agentes especializados                  │
-│  - Mantiene contexto de conversación                       │
-└─────────────────────────────────────────────────────────────┘
-                           │
-         ┌─────────────────┼─────────────────┬──────────┐
-         │                 │                 │          │
-         ▼                 ▼                 ▼          ▼
-┌──────────────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐
-│  WEB SEARCHER    │  │ PAGE LOADER  │  │ DATA     │  │ VALIDATE │
-│ (OpenRouter +    │  │  (HTTP)      │  │ EXTRACT  │  │ (Ollama) │
-│  web_search)     │  │              │  │ (Ollama) │  │          │
-│                  │  │ Descarga     │  │ Extrae   │  │ Valida   │
-│ Busca URLs       │  │ HTML         │  │ datos    │  │ datos    │
-│ en Argentina     │  │              │  │ del HTML │  │          │
-└──────────────────┘  └──────────────┘  └──────────┘  └──────────┘
-                                    │
-                                    ▼
-                              ┌──────────┐
-                              │ STORAGE  │
-                              │  (DB)    │
-                              │          │
-                              └──────────┘
-```
 
-### Configuración de LLMs
+## OpenRouter web_search
 
-| Agente | LLM | Modelo | Propósito | Tool |
-|--------|-----|--------|-----------|------|
-| Orchestrator | OpenRouter | xiaomi/mimo-v2-flash | Coordinación y planificación | - |
-| Web Searcher | OpenRouter | xiaomi/mimo-v2-flash | Buscar URLs en Argentina | openrouter:web_search |
-| Page Loader | N/A | N/A | Descargar HTML | - |
-| Data Extractor | Ollama | gemma4:e4b local | Extraer datos de HTML | - |
-| Validator | Ollama | gemma4:e4b local | Validar resultados | - |
-| Storage Agent | N/A | N/A | Persistencia en SQLite | - |
+El web searcher configura este tool:
 
-Ver [LLM_CONFIG.md](LLM_CONFIG.md) para detalles completos.
-
-### Estructura de Directorios
-
-```
-internal/agent/
-├── orchestrator/          # Agente orquestador
-│   ├── agent.go
-│   └── orchestrator.go
-├── websearcher/           # Agente buscador web (usa OpenRouter web_search)
-│   └── agent.go
-├── pageloader/            # Carga HTML
-│   └── pageloader.go
-├── dataextractor/         # Agente extractor de datos
-│   └── agent.go
-├── validator/             # Agente validador
-│   └── agent.go
-├── storage/               # Agente de almacenamiento
-│   ├── agent.go
-│   └── agent_test.go
-├── shared/                # Componentes compartidos
-│   └── models.go
-├── openrouter.go          # Cliente OpenRouter con soporte a tools
-└── config.go              # Configuración de LLMs
-```
-
-## Búsqueda Web: OpenRouter web_search
-
-### Cómo Funciona
-
-1. **Web Searcher Agent** genera un prompt instructivo en español
-2. **OpenRouter** recibe la solicitud con el tool `openrouter:web_search`
-3. **Server Tool** ejecuta la búsqueda con filtros de dominio (.com.ar, .ar)
-4. **Resultados** se retornan con URLs de tiendas argentinas
-5. **Agent** parsea las URLs y las convierte a `SearchResult`
-
-### Configuración
-
-El Web Searcher está configurado con:
-
-```go
+```json
 {
   "type": "openrouter:web_search",
   "parameters": {
@@ -98,144 +97,49 @@ El Web Searcher está configurado con:
 }
 ```
 
-**Beneficios:**
-- ✅ Búsqueda automática y dinámica
-- ✅ Filtrado de dominios argentinos integrado
-- ✅ Legal y oficial
-- ✅ Sin mantenimiento de scrapers
-- ✅ Modelo decide cuándo buscar
-- ✅ Costo: $4 por 1,000 resultados (~$0.04 por búsqueda típica)
+Notas:
 
-### Cambios Recientes
+- El proyecto depende de OpenRouter para este paso.
+- Aunque el factory tiene una rama para Ollama en el web searcher, eso no provee `web_search` real y no representa el flujo soportado del proyecto.
 
-- ❌ **Eliminado**: URLFinder (hardcodeaba tiendas)
-- ❌ **Eliminado**: SearchTool (scraping manual DuckDuckGo/Bing)
-- ✅ **Añadido**: Soporte a server tools en OpenRouter model
-- ✅ **Integrado**: openrouter:web_search con filtro de dominios
+## Flujo de búsqueda
 
-## Implementación
-
-### Dependencias
-
-- `github.com/tmc/langchaingo` - Framework de agentes LangChain para Go
-- `github.com/PuerkitoBio/goquery` - Parsing HTML (para Data Extractor)
-- `github.com/jmoiron/sqlx` - ORM SQLite
-- `github.com/sirupsen/logrus` - Logging
-
-### Características Clave
-
-1. **Búsqueda dinámica**: Solo dominios argentinos (.com.ar, .ar)
-2. **Sin hardcodeo**: Cualquier tienda argentina es descubierta automáticamente
-3. **Flexible**: Fácil cambiar modelos vía variables de entorno
-4. **Escalable**: Arquitectura preparada para nuevos agentes
-5. **Testeable**: Cada agente puede testearse independientemente
-
-## Flujo de Búsqueda Completo
-
-```
-1. Usuario ejecuta: ./pricenexus search "Game Stick Lite"
-                            │
-                            ▼
-2. Orchestrator.Search() inicia
-                            │
-                            ▼
-3. WebSearcher busca usando OpenRouter web_search
-   "Search for online stores selling 'Game Stick Lite' in Argentina"
-   [Tool: openrouter:web_search con allowed_domains: [.com.ar, .ar]]
-                            │
-                            ▼
-4. OpenRouter ejecuta búsqueda y retorna URLs argentinas
-   - compagamer.com.ar/game-stick-lite
-   - mexx.com.ar/productos?q=game-stick
-   - etc.
-                            │
-                            ▼
-5. PageLoader descarga HTML de cada URL
-                            │
-                            ▼
-6. DataExtractor extrae precios usando Ollama local
-                            │
-                            ▼
-7. Validator valida los datos extraídos
-                            │
-                            ▼
-8. Storage persiste en SQLite
-                            │
-                            ▼
-9. Resultados retornados al usuario
+```text
+Usuario
+  ↓
+CLI (`cmd/`)
+  ↓
+Orchestrator
+  ↓
+Web Searcher → URLs de tiendas argentinas
+  ↓
+Page Loader → HTML
+  ↓
+Data Extractor → productos candidatos
+  ↓
+Validator → resultados válidos
+  ↓
+Storage → SQLite
 ```
 
-## Uso
+## Layout relevante
 
-### Búsqueda de Productos
-
-```bash
-./pricenexus search "Game Stick Lite"
+```text
+cmd/cli/main.go               # entrypoint, carga .env y ejecuta Cobra
+cmd/                         # comandos search, history, add
+internal/agent/config.go     # defaults de LLM y search config
+internal/agent/openrouter.go # cliente OpenRouter y tool wiring
+internal/agent/orchestrator/ # coordinación del flujo
+internal/agent/websearcher/  # búsqueda web
+internal/agent/pageloader/   # carga de páginas
+internal/agent/dataextractor/# extracción de datos
+internal/agent/validator/    # validación determinística
+internal/db/                 # persistencia SQLite
 ```
 
-Busca automáticamente en tiendas argentinas únicamente.
+## Decisiones importantes del estado actual
 
-### Historial de Precios
-
-```bash
-./pricenexus history "Game Stick Lite"
-```
-
-### Programático
-
-```go
-import (
-    "context"
-    "github.com/dyallo/pricenexus/internal/agent/orchestrator"
-    "github.com/sirupsen/logrus"
-)
-
-func main() {
-    logger := logrus.New()
-    orch, err := orchestrator.NewOrchestrator("prices.db", logger)
-    if err != nil {
-        panic(err)
-    }
-    defer orch.Close()
-
-    results, err := orch.Search(context.Background(), "Game Stick Lite")
-    if err != nil {
-        panic(err)
-    }
-    
-    for _, r := range results {
-        println(r.ProductName, r.Price, r.URL)
-    }
-}
-```
-
-## Beneficios de la Arquitectura
-
-1. **Separación de responsabilidades**: Cada agente hace una cosa bien
-2. **Escalabilidad**: Nuevos agentes sin afectar al core
-3. **Flexibilidad**: Cambiar modelos vía environment variables
-4. **Mantenibilidad**: Sin scrapers frágiles, búsqueda oficial
-5. **Dinamismo**: Descubre cualquier tienda argentina automáticamente
-6. **Costo-efectivo**: OpenRouter + Ollama local = máximo valor
-
-## Consideraciones de Seguridad
-
-- Rate limiting implícito (OpenRouter)
-- Filtrado de dominios integrado
-- Validación de datos antes de persistencia
-- User-Agent configurable (via OpenRouter)
-- Logs detallados para auditoría
-
-## Próximos Pasos Posibles
-
-1. **Caché de búsquedas**: Evitar búsquedas duplicadas
-2. **Notificaciones**: Alertar cuando baja el precio
-3. **Más tiendas**: Argentina tiene muchas tiendas menores
-4. **Multihilo**: Procesar múltiples búsquedas en paralelo
-5. **APIs de tiendas**: Integrar APIs oficiales cuando sea posible
-
-## Referencias
-
-- [OpenRouter Web Search Docs](https://openrouter.ai/docs/guides/features/server-tools/web-search)
-- [LangChain Go Documentation](https://tmc.github.io/langchaingo/docs/)
-- [LangChain Go GitHub](https://github.com/tmc/langchaingo)
+- El descubrimiento de URLs es dinámico; no depende de una lista hardcodeada de tiendas.
+- El web searcher debe usar OpenRouter en la práctica.
+- Ollama es opcional, no obligatorio, y hoy aplica al extractor.
+- El validator actual no es un agente LLM-driven.

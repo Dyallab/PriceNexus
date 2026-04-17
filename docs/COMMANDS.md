@@ -1,103 +1,102 @@
 # Comandos de PriceNexus
 
-Esta página referencia todos los comandos disponibles en PriceNexus.
+## CLI
 
-## Comandos CLI
-
-### Búsqueda de Precios
-Busca precios de un producto en tiendas configuradas.
+### Buscar precios
 
 ```bash
 ./pricenexus search "Game Stick Lite"
 ```
 
-### Historial de Precios
-Muestra el historial de precios registrado para un producto.
+### Ver historial
 
 ```bash
 ./pricenexus history "Game Stick Lite"
 ```
 
-### Agregar Tienda
-Agrega una nueva tienda a la base de datos para ser rastreada.
+### Agregar una tienda manualmente
 
 ```bash
-./pricenexus add shop "Tienda Ejemplo" "https://ejemplo.com"
+./pricenexus add shop "Tienda Ejemplo" "https://ejemplo.com.ar"
 ```
 
-## Comandos de Desarrollo
+## Flags globales
 
-### Compilar el Proyecto
-Compila el binario de la CLI.
+Estos flags viven en el root command y aplican a todos los subcomandos:
 
 ```bash
-go build ./cmd/cli
+./pricenexus search "Game Stick Lite" -v
+./pricenexus search "Game Stick Lite" --db-path ./prices.db
 ```
 
-### Ejecutar Tests
-Ejecuta el suite de tests del proyecto.
+- `-v, --verbose`: activa salida verbal adicional del root command
+- `--db-path`: cambia la ruta de la base SQLite (default `prices.db`)
+
+## Desarrollo
+
+### Build
 
 ```bash
-go test ./...
+make build
 ```
 
-### Ver Logs (Modo Verboso)
-Ejecuta un comando con logs detallados para depuración.
+Equivalente directo:
 
 ```bash
-./pricenexus search "test" -v
+go build -o pricenexus ./cmd/cli
 ```
 
-### Usar Base de Datos Específica
-Especifica una ruta diferente para la base de datos.
+### Run
 
 ```bash
-./pricenexus search "test" --db-path /ruta/a/tu/db.db
+make run
 ```
 
-## Comandos Ollama (Modelos Locales)
-
-### Listar Modelos Disponibles
-Verifica qué modelos tienes descargados localmente.
+### Test
 
 ```bash
-ollama list
+make test
 ```
 
-### Descargar un Modelo
-Descarga un nuevo modelo para usarlo localmente.
+Equivalente directo:
 
 ```bash
-ollama pull gemma4:e4b
-# o
-ollama pull phi3:mini
+go test -v ./...
 ```
 
-### Iniciar Servidor Ollama
-Inicia el servidor Ollama si no está corriendo.
+### Instalar binario con Go
+
+```bash
+make install
+```
+
+### Limpiar binario
+
+```bash
+make clean
+```
+
+## Ollama opcional
+
+Solo relevante si configuraste el extractor para usar `ollama:*`.
 
 ```bash
 ollama serve
+ollama pull gemma4:e4b
+ollama list
 ```
 
-### Probar un Modelo
-Ejecuta una interacción directa con un modelo.
-
-```bash
-ollama run gemma4:e4b "Hola, ¿cómo estás?"
-```
-
-## Referencia Rápida
+## Referencia rápida
 
 | Comando | Descripción |
-|---------|-------------|
+|---|---|
 | `./pricenexus search "producto"` | Busca precios de un producto |
 | `./pricenexus history "producto"` | Muestra historial de precios |
-| `./pricenexus add shop "nombre" "url"` | Agrega una nueva tienda |
-| `go build ./cmd/cli` | Compila el proyecto |
-| `go test ./...` | Ejecuta tests |
-| `ollama list` | Ver modelos locales |
-| `ollama pull <modelo>` | Descargar modelo |
+| `./pricenexus add shop "nombre" "url"` | Agrega una tienda a la base |
+| `make build` | Compila el binario |
+| `make run` | Ejecuta el CLI con `go run` |
+| `make test` | Ejecuta tests |
+| `make install` | Instala el binario con Go |
+| `make clean` | Elimina el binario generado |
 
-Para configuración de entorno y LLMs, consulta [LLM_CONFIG.md](LLM_CONFIG.md).
-Para instalación detallada, consulta [SETUP.md](SETUP.md).
+Para setup y variables de entorno, ver [SETUP.md](SETUP.md) y [LLM_CONFIG.md](LLM_CONFIG.md).
