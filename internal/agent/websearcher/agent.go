@@ -7,9 +7,11 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	agentruntime "github.com/dyallo/pricenexus/internal/agent"
 	"github.com/dyallo/pricenexus/internal/agent/shared"
+	"github.com/dyallo/pricenexus/internal/db"
 	"github.com/sirupsen/logrus"
 	"github.com/tmc/langchaingo/llms"
 )
@@ -69,12 +71,16 @@ Only include URLs from Argentine domains.`
 type WebSearcherAgent struct {
 	llm             llms.Model
 	logger          *logrus.Logger
+	repo            db.Repository
+	modelName       string
 	allowedDomains  []string
+	excludedDomains []string
+	maxResults      int
 	defaultCurrency string
 }
 
 // NewWebSearcherAgent creates a new WebSearcherAgent with OpenRouter web_search capabilities
-func NewWebSearcherAgent(llm llms.Model, allowedDomains []string, defaultCurrency string) (*WebSearcherAgent, error) {
+func NewWebSearcherAgent(llm llms.Model, modelName string, repo db.Repository, allowedDomains, excludedDomains []string, maxResults int, defaultCurrency string) (*WebSearcherAgent, error) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.DebugLevel)
 	if strings.TrimSpace(defaultCurrency) == "" {
@@ -83,7 +89,11 @@ func NewWebSearcherAgent(llm llms.Model, allowedDomains []string, defaultCurrenc
 	return &WebSearcherAgent{
 		llm:             llm,
 		logger:          logger,
+		repo:            repo,
+		modelName:       strings.TrimSpace(modelName),
 		allowedDomains:  normalizeAllowedDomains(allowedDomains),
+		excludedDomains: normalizeAllowedDomains(excludedDomains),
+		maxResults:      maxResults,
 		defaultCurrency: strings.ToUpper(strings.TrimSpace(defaultCurrency)),
 	}, nil
 }
@@ -91,6 +101,18 @@ func NewWebSearcherAgent(llm llms.Model, allowedDomains []string, defaultCurrenc
 // Search performs a web search for the given query using OpenRouter's web_search tool.
 // It first attempts to use structured JSON schema output, then falls back to text parsing.
 func (w *WebSearcherAgent) Search(ctx context.Context, query string) ([]shared.SearchResult, error) {
+	if w.repo != nil {
+		if cached, hit, err := w.repo.GetSearchCache(query, w.allowedDomains, w.excludedDomains, w.maxResults); err == nil && hit {
+			var results []shared.SearchResult
+			if err := json.Unmarshal(cached, &results); err == nil {
+				if len(results) > 0 {
+					return results, nil
+				}
+				return nil, fmt.Errorf("no URLs found in cache for query: %s", query)
+			}
+		}
+	}
+
 	var results []shared.SearchResult
 	var err error
 
@@ -107,8 +129,24 @@ func (w *WebSearcherAgent) Search(ctx context.Context, query string) ([]shared.S
 		}
 	}
 
+	w.cacheSearchResults(query, results)
 	w.logger.Debugf("Final result count: %d", len(results))
 	return results, nil
+}
+
+func (w *WebSearcherAgent) cacheSearchResults(query string, results []shared.SearchResult) {
+	if w.repo == nil {
+		return
+	}
+
+	payload, err := json.Marshal(results)
+	if err != nil {
+		return
+	}
+
+	if err := w.repo.SetSearchCache(query, w.allowedDomains, w.excludedDomains, w.maxResults, payload, 24*time.Hour); err != nil {
+		return
+	}
 }
 
 func (w *WebSearcherAgent) searchWithSchema(ctx context.Context, query string) ([]shared.SearchResult, error) {

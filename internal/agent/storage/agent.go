@@ -18,12 +18,7 @@ type StorageAgent struct {
 	logger *logrus.Logger
 }
 
-func NewStorageAgent(dbPath string, logger *logrus.Logger) (*StorageAgent, error) {
-	repo, err := db.NewRepository(dbPath, logger)
-	if err != nil {
-		return nil, err
-	}
-
+func NewStorageAgent(repo db.Repository, logger *logrus.Logger) (*StorageAgent, error) {
 	return &StorageAgent{
 		repo:   repo,
 		logger: logger,

@@ -10,7 +10,7 @@ import (
 )
 
 func TestNewPageLoader(t *testing.T) {
-	loader := NewPageLoader()
+	loader := NewPageLoader(nil)
 	if loader == nil {
 		t.Fatal("PageLoader should not be nil")
 	}
@@ -20,7 +20,7 @@ func TestNewPageLoader(t *testing.T) {
 }
 
 func TestExtractSection(t *testing.T) {
-	loader := NewPageLoader()
+	loader := NewPageLoader(nil)
 
 	html := `<div class="product"><h1>Test Product</h1><p>Price: $100</p></div>`
 
@@ -41,7 +41,7 @@ func TestLoadHTMLHandlesGzipResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	loader := NewPageLoader()
+	loader := NewPageLoader(nil)
 	html, err := loader.LoadHTML(context.Background(), server.URL)
 	if err != nil {
 		t.Fatalf("LoadHTML() unexpected error: %v", err)

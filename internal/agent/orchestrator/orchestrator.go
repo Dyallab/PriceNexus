@@ -13,6 +13,7 @@ import (
 	"github.com/dyallo/pricenexus/internal/agent/storage"
 	"github.com/dyallo/pricenexus/internal/agent/validator"
 	"github.com/dyallo/pricenexus/internal/agent/websearcher"
+	"github.com/dyallo/pricenexus/internal/db"
 	"github.com/sirupsen/logrus"
 )
 
@@ -42,18 +43,27 @@ func NewOrchestrator(dbPath string, logger *logrus.Logger) (*Orchestrator, error
 		return nil, fmt.Errorf("data extractor LLM is nil after initialization")
 	}
 
+	repo, err := db.NewRepository(dbPath, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize repository: %w", err)
+	}
+
 	webSearcherAgent, err := websearcher.NewWebSearcherAgent(
 		webSearcherLLM,
+		llmConfig.WebSearcher,
+		repo,
 		searchConfig.AllowedDomains,
+		searchConfig.ExcludedDomains,
+		searchConfig.MaxResults,
 		searchConfig.DefaultCurrency,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create web searcher agent: %w", err)
 	}
 
-	pageLoader := pageloader.NewPageLoader()
+	pageLoader := pageloader.NewPageLoader(repo)
 
-	dataExtractor, err := dataextractor.NewDataExtractorAgent(dataExtractorLLM)
+	dataExtractor, err := dataextractor.NewDataExtractorAgent(dataExtractorLLM, llmConfig.DataExtractor, repo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create data extractor agent: %w", err)
 	}
@@ -65,7 +75,7 @@ func NewOrchestrator(dbPath string, logger *logrus.Logger) (*Orchestrator, error
 		return nil, fmt.Errorf("failed to create validator agent: %w", err)
 	}
 
-	storageAgent, err := storage.NewStorageAgent(dbPath, logger)
+	storageAgent, err := storage.NewStorageAgent(repo, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create storage agent: %w", err)
 	}

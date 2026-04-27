@@ -2,20 +2,26 @@ package dataextractor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 
 	agentruntime "github.com/dyallo/pricenexus/internal/agent"
 	"github.com/dyallo/pricenexus/internal/agent/shared"
+	"github.com/dyallo/pricenexus/internal/db"
 	"github.com/tmc/langchaingo/agents"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/tools"
 )
+
+const extractionCachePromptVersion = "v1"
 
 // DataExtractorAgent extracts product data from HTML pages
 // using a multi-strategy approach:
@@ -23,8 +29,10 @@ import (
 // 2. If that fails, uses LLM to find content and extract
 // 3. Falls back to gentle HTML cleaning with preserved data attributes
 type DataExtractorAgent struct {
-	executor *agents.Executor
-	llm      llms.Model
+	executor  *agents.Executor
+	llm       llms.Model
+	modelName string
+	repo      db.Repository
 }
 
 type htmlFragmentResponse struct {
@@ -36,15 +44,17 @@ type productExtractionResponse struct {
 }
 
 // NewDataExtractorAgent creates a new data extractor agent
-func NewDataExtractorAgent(llm llms.Model) (*DataExtractorAgent, error) {
+func NewDataExtractorAgent(llm llms.Model, modelName string, repo db.Repository) (*DataExtractorAgent, error) {
 	toolList := []tools.Tool{}
 
 	agent := agents.NewOneShotAgent(llm, toolList)
 	executor := agents.NewExecutor(agent)
 
 	return &DataExtractorAgent{
-		executor: executor,
-		llm:      llm,
+		executor:  executor,
+		llm:       llm,
+		modelName: strings.TrimSpace(modelName),
+		repo:      repo,
 	}, nil
 }
 
@@ -588,25 +598,41 @@ func normalizeHTMLFragment(fragment string) string {
 
 // Extract extracts product data from HTML using multiple strategies
 func (d *DataExtractorAgent) Extract(ctx context.Context, html string) ([]shared.SearchResult, error) {
+	if d.repo != nil {
+		if cached, hit, err := d.repo.GetExtractionCache(extractionCacheHash(html), d.cacheModelName(), extractionCachePromptVersion); err == nil && hit {
+			var results []shared.SearchResult
+			if err := json.Unmarshal(cached, &results); err == nil {
+				if len(results) > 0 {
+					return results, nil
+				}
+				return nil, fmt.Errorf("no products extracted from html")
+			}
+		}
+	}
+
 	// Strategy 1: Try to extract structured data first (meta tags, JSON-LD, data attributes)
 	results := d.extractStructuredData(html)
 	if len(results) > 0 {
+		d.cacheExtractionResult(html, results)
 		return results, nil
 	}
 
 	// Strategy 2: Use LLM to find content structure and extract
 	results, llmErr := d.extractWithLLMContentFinder(ctx, html)
 	if llmErr == nil && len(results) > 0 {
+		d.cacheExtractionResult(html, results)
 		return results, nil
 	}
 
 	// Strategy 3: Fall back to gentle HTML cleaning and basic extraction
 	results, fallbackErr := d.extractWithGentleCleaning(ctx, html)
 	if fallbackErr == nil && len(results) > 0 {
+		d.cacheExtractionResult(html, results)
 		return results, nil
 	}
 
 	if fallbackErr != nil {
+		d.cacheExtractionResult(html, nil)
 		if llmErr != nil {
 			return nil, fmt.Errorf(
 				"llm extraction failed: content finder: %v; gentle cleaning: %w",
@@ -619,10 +645,39 @@ func (d *DataExtractorAgent) Extract(ctx context.Context, html string) ([]shared
 	}
 
 	if llmErr != nil {
+		d.cacheExtractionResult(html, nil)
 		return nil, fmt.Errorf("no products extracted after llm fallback: %w", llmErr)
 	}
 
+	d.cacheExtractionResult(html, nil)
 	return nil, fmt.Errorf("no products extracted from html")
+}
+
+func (d *DataExtractorAgent) cacheModelName() string {
+	if strings.TrimSpace(d.modelName) != "" {
+		return d.modelName
+	}
+	return fmt.Sprintf("%T", d.llm)
+}
+
+func (d *DataExtractorAgent) cacheExtractionResult(html string, results []shared.SearchResult) {
+	if d.repo == nil {
+		return
+	}
+
+	payload, err := json.Marshal(results)
+	if err != nil {
+		return
+	}
+
+	if err := d.repo.SetExtractionCache(extractionCacheHash(html), d.cacheModelName(), extractionCachePromptVersion, payload, 30*24*time.Hour); err != nil {
+		return
+	}
+}
+
+func extractionCacheHash(html string) string {
+	sum := sha256.Sum256([]byte(html))
+	return hex.EncodeToString(sum[:])
 }
 
 // =============================================================================

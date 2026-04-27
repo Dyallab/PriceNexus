@@ -9,23 +9,32 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/dyallo/pricenexus/internal/db"
 )
 
 type PageLoader struct {
 	client *http.Client
+	repo   db.Repository
 }
 
-func NewPageLoader() *PageLoader {
+func NewPageLoader(repo db.Repository) *PageLoader {
 	return &PageLoader{
 		client: &http.Client{
 			Timeout: 60 * time.Second,
 		},
+		repo: repo,
 	}
 }
 
 // LoadHTML fetches HTML using simple HTTP request (no JavaScript rendering)
 // Use this for simple pages that don't require JavaScript
 func (pl *PageLoader) LoadHTML(ctx context.Context, url string) (string, error) {
+	if pl.repo != nil {
+		if cachedHTML, hit, err := pl.repo.GetPageCache(url); err == nil && hit {
+			return cachedHTML, nil
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return "", fmt.Errorf("error creating request: %w", err)
@@ -56,6 +65,12 @@ func (pl *PageLoader) LoadHTML(ctx context.Context, url string) (string, error) 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("error reading response: %w", err)
+	}
+
+	if pl.repo != nil {
+		if err := pl.repo.SetPageCache(url, string(body), 7*24*time.Hour); err != nil {
+			// Cache writes are best-effort only.
+		}
 	}
 
 	return string(body), nil

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/dyallo/pricenexus/internal/agent/shared"
+	"github.com/dyallo/pricenexus/internal/db"
 	"github.com/sirupsen/logrus"
 )
 
@@ -14,8 +15,13 @@ func TestNewStorageAgent(t *testing.T) {
 
 	logger := logrus.New()
 	dbPath := filepath.Join(t.TempDir(), "prices.db")
+	repo, err := db.NewRepository(dbPath, logger)
+	if err != nil {
+		t.Fatalf("NewRepository() unexpected error: %v", err)
+	}
+	defer repo.Close()
 
-	agent, err := NewStorageAgent(dbPath, logger)
+	agent, err := NewStorageAgent(repo, logger)
 	if err != nil {
 		t.Fatalf("NewStorageAgent() unexpected error: %v", err)
 	}
@@ -30,7 +36,13 @@ func TestSavePricesAndGetHistory(t *testing.T) {
 
 	logger := logrus.New()
 	dbPath := filepath.Join(t.TempDir(), "prices.db")
-	agent, err := NewStorageAgent(dbPath, logger)
+	repo, err := db.NewRepository(dbPath, logger)
+	if err != nil {
+		t.Fatalf("NewRepository() unexpected error: %v", err)
+	}
+	defer repo.Close()
+
+	agent, err := NewStorageAgent(repo, logger)
 	if err != nil {
 		t.Fatalf("NewStorageAgent() unexpected error: %v", err)
 	}
@@ -75,7 +87,13 @@ func TestGetHistoryReturnsPriceHistoryRows(t *testing.T) {
 
 	logger := logrus.New()
 	dbPath := filepath.Join(t.TempDir(), "prices.db")
-	agent, err := NewStorageAgent(dbPath, logger)
+	repo, err := db.NewRepository(dbPath, logger)
+	if err != nil {
+		t.Fatalf("NewRepository() unexpected error: %v", err)
+	}
+	defer repo.Close()
+
+	agent, err := NewStorageAgent(repo, logger)
 	if err != nil {
 		t.Fatalf("NewStorageAgent() unexpected error: %v", err)
 	}
